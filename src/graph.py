@@ -40,8 +40,26 @@ def node_collect(state: DigestState) -> DigestState:
 
 def node_filter(state: DigestState) -> DigestState:
     items = deduplicate(state.get("items", []))
+    
+    # Limit papers to avoid overwhelming the digest
+    paper_count = 0
+    filtered_items = []
+    skipped_papers = 0
+    
+    for item in sorted(items, key=lambda x: x["published"], reverse=True):
+        if "Papers" in item.get("source", "") and paper_count >= 7:
+            print(f"   Skipping paper: {item['title'][:50]}...")
+            skipped_papers += 1
+            continue  # Skip additional papers
+        if "Papers" in item.get("source", ""):
+            paper_count += 1
+        filtered_items.append(item)
+    
     print(f"📊 After deduplication: {len(items)} items")
-    state["items"] = items
+    if skipped_papers > 0:
+        print(f"📊 Skipped {skipped_papers} additional papers (kept top 7)")
+    print(f"📊 After limiting papers: {len(filtered_items)} items")
+    state["items"] = filtered_items
     return state
 
 
@@ -84,9 +102,15 @@ def node_categorize(state: DigestState) -> DigestState:
         
         prompt = f"""Analyze these biotech/pharma headlines:
 
-1. Identify duplicate stories (same event covered by different sources)
-2. For duplicates, mark all but the best/most detailed version as "SKIP"
-3. Categorize remaining items into EXACTLY one of these categories:
+STEP 1: FIND DUPLICATES
+These are the SAME story if they describe the same event:
+- "Company X wins case" = "Judge rules for Company X" = "Court favors Company X"
+- "FDA approves Drug Y" = "Drug Y gets FDA approval" = "Company receives approval for Drug Y"
+- "Company raises $Z" = "Company valued at $W after funding" = "Company secures funding"
+
+STEP 2: For duplicates, mark all but the best/most detailed version as "SKIP"
+
+STEP 3: Categorize remaining items into EXACTLY one of these categories:
    - Regulatory & FDA
    - Clinical & Research
    - Deals & Finance
@@ -99,11 +123,14 @@ Mark opinion pieces or off-topic items as "SKIP".
 Items:
 {items_text}
 
-Format your response with ONLY the category name or SKIP, one per line:
-1. Regulatory & FDA
-2. SKIP
-3. Clinical & Research
-etc."""
+OUTPUT: One line per item. Write ONLY the category name OR write SKIP.
+NO NUMBERS. NO PUNCTUATION. Just the category or SKIP.
+
+Example correct output:
+Regulatory & FDA
+SKIP
+Clinical & Research
+Company News"""
 
         resp = client.chat.completions.create(
             model=model,
@@ -135,6 +162,7 @@ etc."""
             
             if "SKIP" in category.upper():
                 state["items"][i]["skip"] = True
+                state["items"][i]["skip_reason"] = "duplicate or off-topic"
             else:
                 # Only use valid categories
                 valid_categories = [
@@ -165,7 +193,17 @@ etc."""
                     
         # Remove skipped items
         original_count = len(state["items"])
+        skipped_items = [item for item in state["items"] if item.get("skip")]
         state["items"] = [item for item in state["items"] if not item.get("skip")]
+        
+        # Log skipped items
+        if skipped_items:
+            print(f"📊 Skipped items:")
+            for item in skipped_items[:5]:  # Show first 5
+                print(f"   - {item['title'][:60]}... ({item.get('skip_reason', 'duplicate')})")
+            if len(skipped_items) > 5:
+                print(f"   ... and {len(skipped_items) - 5} more")
+        
         print(f"📊 After categorization: {len(state['items'])} items (skipped {original_count - len(state['items'])})")
         
         # Debug: show categories assigned
@@ -204,6 +242,7 @@ def node_shortify(state: DigestState) -> DigestState:
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     client = OpenAI(api_key=api_key)
 
+    shortified_count = 0
     for item in state["items"]:
         prompt = (
             "Rewrite this headline in ≤10 words, keep the core idea:\n"
@@ -217,11 +256,12 @@ def node_shortify(state: DigestState) -> DigestState:
                 temperature=0.3,
             )
             item["title"] = resp.choices[0].message.content.strip()
+            shortified_count += 1
         except Exception as exc:
             # fail gracefully – just log & continue
-            print("⚠️  LLM error:", exc)
+            print(f"⚠️  LLM error for item {shortified_count + 1}: {exc}")
             
-    print(f"📊 Shortified {len(state.get('items', []))} items")
+    print(f"📊 Shortified {shortified_count}/{len(state.get('items', []))} items")
     return state
 
 

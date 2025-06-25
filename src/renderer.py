@@ -8,9 +8,6 @@ def to_markdown(items):
     for it in items:
         cat = it.get("category", "Other")
         sections[cat].append(it)
-
-    # Debug: print what categories we actually have
-    print(f"📊 Categories found: {list(sections.keys())}")
     
     lines = ["## Daily Biotech / Pharma Headlines\n"]
     
@@ -36,8 +33,6 @@ def to_markdown(items):
         lines.append(f"### {cat}")
         for i in sections[cat]:
             title = i["title"].strip()
-            if "blurb" in i:       # added later by the LLM agent
-                title += f" — *{i['blurb']}*"
             lines.append(f"- [{title}]({i['link']}) — {i['source']}")
         lines.append("")           # blank line
     return "\n".join(lines)
