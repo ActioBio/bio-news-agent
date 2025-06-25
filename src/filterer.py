@@ -1,4 +1,3 @@
-# src/filterer.py
 """Helpers for filtering collected news items."""
 
 

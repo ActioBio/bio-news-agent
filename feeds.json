@@ -1,30 +1,26 @@
 {
   "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/press-releases/rss.xml": {
-    "category": "Regulatory",
-    "source": "FDA Press Releases"
+    "category": "All",
+    "source": "FDA"
   },
   "https://www.statnews.com/feed/": {
-    "category": "News & Mags",
+    "category": "All",
     "source": "STAT News"
   },
   "https://endpts.com/feed/": {
-    "category": "News & Mags",
+    "category": "All",
     "source": "Endpoints News"
   },
   "https://www.fiercebiotech.com/rss/xml": {
-    "category": "News & Mags",
+    "category": "All",
     "source": "FierceBiotech"
   },
   "https://www.nature.com/nrd.rss": {
-    "category": "Research",
+    "category": "All",
     "source": "Nature Reviews Drug Discovery"
   },
-  "https://www.evaluate.com/vantage/feed": {
-    "category": "Analysis",
-    "source": "Evaluate Vantage"
-  },
   "https://www.biopharmadive.com/feeds/news/": {
-    "category": "Industry",
+    "category": "All",
     "source": "BioPharma Dive"
   }
 }
