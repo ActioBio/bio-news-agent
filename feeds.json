@@ -1,90 +1,30 @@
 {
-  "https://openai.com/news/rss.xml": {
-    "category": "Lab Blogs",
-    "source": "OpenAI"
+  "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/press-releases/rss.xml": {
+    "category": "Regulatory",
+    "source": "FDA Press Releases"
   },
-  "https://blog.google/technology/ai/rss/": {
-    "category": "Lab Blogs",
-    "source": "Google AI"
-  },
-  "https://huggingface.co/blog/feed.xml": {
-    "category": "Lab Blogs",
-    "source": "Hugging Face"
-  },
-  "https://deepmind.google/discover/blog/rss.xml": {
-    "category": "Lab Blogs",
-    "source": "DeepMind"
-  },
-  "https://blogs.microsoft.com/ai/feed/": {
-    "category": "Lab Blogs",
-    "source": "Microsoft AI"
-  },
-  "https://www.technologyreview.com/topic/artificial-intelligence/feed/": {
+  "https://www.statnews.com/feed/": {
     "category": "News & Mags",
-    "source": "MIT Technology Review"
+    "source": "STAT News"
   },
-  "https://www.wired.com/feed/tag/ai/latest/rss": {
+  "https://endpts.com/feed/": {
     "category": "News & Mags",
-    "source": "Wired"
+    "source": "Endpoints News"
   },
-  "https://feeds.arstechnica.com/arstechnica/technology-lab": {
+  "https://www.fiercebiotech.com/rss/xml": {
     "category": "News & Mags",
-    "source": "Ars Technica"
+    "source": "FierceBiotech"
   },
-  "https://techcrunch.com/category/artificial-intelligence/feed/": {
-    "category": "News & Mags",
-    "source": "TechCrunch"
-  },
-  "https://venturebeat.com/ai/feed/": {
-    "category": "News & Mags",
-    "source": "VentureBeat"
-  },
-  "https://thegradient.pub/rss/": {
-    "category": "News & Mags",
-    "source": "The Gradient"
-  },
-  "https://thesequence.substack.com/feed": {
-    "category": "Newsletters",
-    "source": "The Sequence"
-  },
-  "https://importai.substack.com/feed": {
-    "category": "Newsletters",
-    "source": "Import AI"
-  },
-  "https://www.latent.space/feed.xml": {
-    "category": "Newsletters",
-    "source": "Latent Space"
-  },
-  "https://aibreakfast.substack.com/feed": {
-    "category": "Newsletters",
-    "source": "AI Breakfast"
-  },
-  "https://www.deeplearning.ai/the-batch/feed/": {
-    "category": "Newsletters",
-    "source": "The Batch"
-  },
-  "https://lilianweng.github.io/posts/index.xml": {
-    "category": "Deep Dives",
-    "source": "Lil'Log"
-  },
-  "https://jalammar.github.io/feed.xml": {
-    "category": "Deep Dives",
-    "source": "Jay Alammar"
-  },
-  "https://sebastianraschka.com/rss_feed.xml": {
-    "category": "Practitioners",
-    "source": "Sebastian Raschka"
-  },
-  "https://simonwillison.net/atom/everything/": {
-    "category": "Practitioners",
-    "source": "Simon Willison"
-  },
-  "https://karpathy.github.io/feed.xml": {
-    "category": "Practitioners",
-    "source": "Andrej Karpathy"
-  },
-  "https://jamesg.blog/hf-papers.xml": {
+  "https://www.nature.com/nrd.rss": {
     "category": "Research",
-    "source": "Hugging Face Papers"
+    "source": "Nature Reviews Drug Discovery"
+  },
+  "https://www.evaluate.com/vantage/feed": {
+    "category": "Analysis",
+    "source": "Evaluate Vantage"
+  },
+  "https://www.biopharmadive.com/feeds/news/": {
+    "category": "Industry",
+    "source": "BioPharma Dive"
   }
 }

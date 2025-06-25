@@ -1,8 +1,8 @@
-# ai-news-agent
+# bio-news-agent
 
-A lightweight AI agent that grabs fresh AI-related headlines and posts a daily digest to GitHub Issues.
+A lightweight AI agent that grabs fresh biotech/pharma headlines and posts a daily digest to GitHub Issues.
 
-🔔 **Watch this repository** to receive the daily AI news digest email delivered straight to your inbox.
+🔔 **Watch this repository** to receive the daily biotech news digest email delivered straight to your inbox.
 
 ## Prerequisites
 
@@ -18,7 +18,7 @@ pip install uv
 
 ### 2. Run
 ```bash
-cd ai-news-agent
+cd bio-news-agent
 uv run python src/main.py
 ```
 
