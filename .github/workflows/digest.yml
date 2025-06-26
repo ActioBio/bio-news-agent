@@ -15,7 +15,6 @@ jobs:
     env:
       PYTHONPATH: src
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
 
     steps:
       - uses: actions/checkout@v4
@@ -51,7 +50,7 @@ jobs:
               labels: 'ai-digest'
             });
 
-            const existing = issues.find(i => i.title === `AI Headlines – ${today}`);
+            const existing = issues.find(i => i.title === `Biotech / Pharma Headlines – ${today}`);
 
             if (existing) {
               await github.rest.issues.update({
@@ -65,7 +64,7 @@ jobs:
               await github.rest.issues.create({
                 owner: context.repo.owner,
                 repo:  context.repo.repo,
-                title: `AI Headlines – ${today}`,
+                title: `Biotech / Pharma Headlines – ${today}`,
                 body,
                 labels: ['ai-digest']
               });
