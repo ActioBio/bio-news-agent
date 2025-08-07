@@ -86,7 +86,7 @@ def node_shortify(state: DigestState) -> DigestState:
         )
         try:
             resp = client.chat.completions.create(
-                model="gpt-4.1-mini",
+                model="gpt-5-mini",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
             )
@@ -162,7 +162,7 @@ For each item, respond with ONLY:
 One per line. Be VERY aggressive marking duplicates."""
 
         resp = client.chat.completions.create(
-            model="gpt-4.1-mini",
+            model="gpt-5-mini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
         )
