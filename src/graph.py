@@ -6,278 +6,423 @@ Flow:
 """
 from __future__ import annotations
 
-import os
-from openai import OpenAI
-from pathlib import Path
-from typing import TypedDict, List, Dict
+import logging
+import re
 from collections import defaultdict
+from pathlib import Path
+from typing import Any, Dict, List, TypedDict
 
-from dotenv import load_dotenv
+from openai import OpenAI
 from langgraph.graph import StateGraph
 
 from collector import collect_items
+from config import (
+    CATEGORIES,
+    COMPANY_NAMES,
+    MAX_ITEMS_PER_SOURCE,
+    OPENAI_API_KEY,
+    OPENAI_MODEL,
+    PAPER_LIMIT,
+)
 from filterer import deduplicate
 from renderer import to_markdown
 
-# load .env once
-load_dotenv()
+logger = logging.getLogger(__name__)
+
+BATCH_SIZE = 20
+
 
 # ──────────────────────────────────────────────────────────────
 # 1. Shared state definition
 class DigestState(TypedDict, total=False):
-    items:    List[Dict]   # list of headline dicts
-    markdown: str          # final rendered MD
+    items: List[Dict[str, Any]]
+    markdown: str
 
 
 # ──────────────────────────────────────────────────────────────
 # 2. Nodes
 def node_collect(state: DigestState) -> DigestState:
     items = collect_items()
-    print(f"📊 Collected {len(items)} items")
+    logger.info(f"Collected {len(items)} items")
     state["items"] = items
     return state
 
 
 def node_filter(state: DigestState) -> DigestState:
     items = deduplicate(state.get("items", []))
-    
-    # Limit papers to avoid overwhelming the digest
+
+    # Limit papers and apply source cap
     paper_count = 0
+    source_counts: Dict[str, int] = defaultdict(int)
     filtered_items = []
     skipped_papers = 0
-    
+    skipped_source_cap = 0
+
     for item in sorted(items, key=lambda x: x["published"], reverse=True):
-        if "Papers" in item.get("source", "") and paper_count >= 7:
-            print(f"   Skipping paper: {item['title'][:50]}...")
+        # Apply per-source cap for diversity
+        source = item.get("source", "")
+        if MAX_ITEMS_PER_SOURCE > 0 and source_counts[source] >= MAX_ITEMS_PER_SOURCE:
+            logger.debug(f"Skipping (source cap): {item['title'][:50]}...")
+            skipped_source_cap += 1
+            continue
+        source_counts[source] += 1
+
+        # Limit papers
+        if "Papers" in source and paper_count >= PAPER_LIMIT:
+            logger.debug(f"Skipping paper: {item['title'][:50]}...")
             skipped_papers += 1
-            continue  # Skip additional papers
-        if "Papers" in item.get("source", ""):
+            continue
+        if "Papers" in source:
             paper_count += 1
+
         filtered_items.append(item)
-    
-    print(f"📊 After deduplication: {len(items)} items")
+
+    logger.info(f"After deduplication: {len(items)} items")
+    if skipped_source_cap > 0:
+        logger.info(f"Skipped {skipped_source_cap} items due to source cap ({MAX_ITEMS_PER_SOURCE}/source)")
     if skipped_papers > 0:
-        print(f"📊 Skipped {skipped_papers} additional papers (kept top 7)")
-    print(f"📊 After limiting papers: {len(filtered_items)} items")
+        logger.info(f"Skipped {skipped_papers} additional papers (kept top {PAPER_LIMIT})")
+    logger.info(f"After filtering: {len(filtered_items)} items")
     state["items"] = filtered_items
     return state
 
 
 def node_shortify(state: DigestState) -> DigestState:
-    """
-    Shorten titles to ≤10 words for cleaner digest and better duplicate detection
-    """
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        print("⚠️  No OPENAI_API_KEY found, skipping shortify")
+    """Shorten titles to ≤10 words using batched LLM calls."""
+    if not OPENAI_API_KEY:
+        logger.warning("No OPENAI_API_KEY found, skipping shortify")
         return state
 
-    if not state.get("items"):
-        print("⚠️  No items to shortify")
+    items = state.get("items", [])
+    if not items:
+        logger.warning("No items to shortify")
         return state
 
-    client = OpenAI(api_key=api_key)
-
+    client = OpenAI(api_key=OPENAI_API_KEY)
     shortified_count = 0
-    for item in state["items"]:
-        prompt = (
-            "Rewrite this headline in ≤10 words, keep the core idea:\n"
-            f"{item['title']}"
+
+    # Process in batches of BATCH_SIZE
+    for batch_start in range(0, len(items), BATCH_SIZE):
+        batch = items[batch_start : batch_start + BATCH_SIZE]
+
+        # Build batch prompt
+        titles_list = "\n".join(
+            f"{i+1}. {item['title']}" for i, item in enumerate(batch)
         )
+        prompt = f"""Shorten each headline to 8 words MAX. Keep the core news. Remove fluff.
+
+Rules:
+- STRICT 8-word limit
+- Use active voice
+- Remove source attributions, company descriptors
+- Keep drug names, company names, key numbers
+
+{titles_list}
+
+Return ONLY shortened headlines, numbered (1. headline, 2. headline, etc.)"""
+
         try:
             resp = client.chat.completions.create(
-                model="gpt-5-mini",
+                model=OPENAI_MODEL,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
             )
-            item["title"] = resp.choices[0].message.content.strip()
-            shortified_count += 1
+            content = resp.choices[0].message.content
+            if not content:
+                continue
+            response_text = content.strip()
+
+            # Parse response
+            lines = [
+                re.sub(r"^\d+\.\s*", "", line.strip())
+                for line in response_text.split("\n")
+                if line.strip() and re.match(r"^\d+\.", line.strip())
+            ]
+
+            # Apply shortened titles
+            for i, new_title in enumerate(lines):
+                if i < len(batch) and new_title:
+                    batch[i]["title"] = new_title
+                    shortified_count += 1
+
         except Exception as exc:
-            print(f"⚠️  LLM error for item {shortified_count + 1}: {exc}")
-            
-    print(f"📊 Shortified {shortified_count}/{len(state.get('items', []))} items")
+            logger.warning(f"LLM error for batch starting at {batch_start}: {exc}")
+
+    logger.info(f"Shortified {shortified_count}/{len(items)} items")
     return state
 
 
+def _extract_keywords(title: str) -> list[str]:
+    """Extract significant keywords from title for fingerprinting.
+
+    Returns a sorted list (not set) for deterministic fingerprinting.
+    """
+    title_lower = title.lower()
+    # Remove common words
+    stopwords = {
+        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+        "of", "with", "by", "from", "as", "is", "was", "are", "were", "been",
+        "be", "have", "has", "had", "do", "does", "did", "will", "would",
+        "could", "should", "may", "might", "must", "shall", "can", "need",
+        "its", "it", "this", "that", "these", "those", "new", "says", "said",
+    }
+    words = sorted(set(
+        w for w in re.findall(r"\b\w+\b", title_lower)
+        if len(w) > 3 and w not in stopwords
+    ))
+    return words
+
+
+def _extract_entities(title: str) -> set[str]:
+    """Extract company/biotech names from title for entity-based dedup.
+
+    Looks for capitalized multi-word names and known patterns.
+    """
+    entities: set[str] = set()
+    title_lower = title.lower()
+
+    # Check for known company names from config
+    for company in COMPANY_NAMES:
+        if company in title_lower:
+            entities.add(company)
+
+    # Extract capitalized words that look like company names (ending in common suffixes)
+    # Pattern: Capitalized word(s) followed by Therapeutics, Pharma, Bio, etc.
+    company_suffixes = [
+        "therapeutics", "pharma", "pharmaceuticals", "biotech", "biosciences",
+        "sciences", "genomics", "oncology", "medicine", "health", "bio",
+    ]
+    words = title.split()
+    for i, word in enumerate(words):
+        word_lower = word.lower().rstrip(",'s")
+        if word_lower in company_suffixes and i > 0:
+            # Include the word before the suffix as part of company name
+            prev_word = words[i - 1].rstrip(",'s").lower()
+            if prev_word and prev_word[0].isupper() or len(prev_word) > 2:
+                entities.add(f"{prev_word}_{word_lower}")
+
+    # Also extract standalone capitalized proper nouns that might be companies
+    # Look for CamelCase or all-caps abbreviations
+    for word in words:
+        clean = word.strip("',.-()[]")
+        if len(clean) >= 3:
+            # All caps (like "FDA", "NIH", "J&J")
+            if clean.isupper() and len(clean) <= 5:
+                entities.add(clean.lower())
+            # Capitalized and looks like a name (not common words)
+            elif clean[0].isupper() and clean.lower() not in {
+                "the", "and", "for", "with", "from", "into", "after", "phase",
+                "new", "first", "trial", "drug", "data", "study", "cancer",
+                "treatment", "therapy", "patients", "disease", "health",
+            }:
+                entities.add(clean.lower())
+
+    return entities
+
+
+def _run_keyword_dedup(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Run keyword-based duplicate detection on items."""
+    seen_keywords: Dict[str, int] = {}
+    seen_entities: Dict[str, int] = {}
+
+    for i, item in enumerate(items):
+        if item.get("skip"):
+            continue
+
+        keywords = _extract_keywords(item["title"])
+        # Create fingerprint from top keywords (already sorted by _extract_keywords)
+        fingerprint = "_".join(keywords[:5])
+
+        if fingerprint and fingerprint in seen_keywords:
+            item["skip"] = True
+            item["skip_reason"] = f"keyword duplicate of item {seen_keywords[fingerprint]}"
+            logger.debug(f"Keyword duplicate found: {item['title']}")
+        elif fingerprint:
+            seen_keywords[fingerprint] = i
+
+    # Second pass: entity-based dedup for same company/topic from different sources
+    for i, item in enumerate(items):
+        if item.get("skip"):
+            continue
+
+        entities = _extract_entities(item["title"])
+        curr_keywords = set(_extract_keywords(item["title"]))
+
+        # Create entity key from significant entities (companies, orgs)
+        # Only flag as duplicate if multiple specific entities match
+        for entity in entities:
+            # Skip generic entities
+            if entity in {"fda", "nih", "cdc", "ema"}:
+                continue
+            entity_key = entity
+            if entity_key in seen_entities:
+                prev_idx = seen_entities[entity_key]
+                # Check if titles share multiple keywords (not just the entity)
+                prev_keywords = set(_extract_keywords(items[prev_idx]["title"]))
+                shared = prev_keywords & curr_keywords
+                # If they share the entity AND 2+ other keywords, likely duplicate
+                if len(shared) >= 2:
+                    item["skip"] = True
+                    item["skip_reason"] = f"entity duplicate ({entity}) of item {prev_idx}"
+                    logger.debug(f"Entity duplicate found: {item['title']}")
+                    break
+            else:
+                seen_entities[entity_key] = i
+
+    original_count = len(items)
+    items = [item for item in items if not item.get("skip")]
+    if original_count != len(items):
+        logger.info(f"Keyword dedup removed {original_count - len(items)} duplicates")
+    return items
+
+
 def node_categorize(state: DigestState) -> DigestState:
-    """
-    Use LLM to categorize items and identify duplicates.
-    """
-    api_key = os.getenv("OPENAI_API_KEY")
-    
-    if not api_key:
-        print("⚠️  No OPENAI_API_KEY found, using default categorization")
-        categories = [
-            "Regulatory & FDA",
-            "Clinical & Research", 
-            "Deals & Finance",
-            "Company News",
-            "Policy & Politics",
-            "Market Insights"
-        ]
-        for i, item in enumerate(state.get("items", [])):
-            item["category"] = categories[i % len(categories)]
+    """Use LLM to categorize items and identify duplicates."""
+    items = state.get("items", [])
+    if not items:
+        logger.warning("No items to categorize")
         return state
-        
-    if not state.get("items"):
-        print("⚠️  No items to categorize")
+
+    if not OPENAI_API_KEY:
+        logger.warning("No OPENAI_API_KEY found, using keyword categorization")
+        for item in items:
+            item["category"] = _keyword_categorize(item["title"])
+        # Still run keyword-based duplicate detection
+        items = _run_keyword_dedup(items)
+        state["items"] = items
         return state
-    
+
     try:
-        client = OpenAI(api_key=api_key)
-        
-        # Create item list with shortened titles
-        items_text = "\n".join([
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        # Create item list
+        items_text = "\n".join(
             f"{i+1}. {item['title']} — {item['source']}"
-            for i, item in enumerate(state["items"])
-        ])
-        
-        prompt = f"""Analyze these biotech/pharma headlines for duplicates and categorization.
+            for i, item in enumerate(items)
+        )
 
-CRITICAL DUPLICATE DETECTION:
-Look for stories about the SAME EVENT even if worded differently:
-- "ACIP reviews vaccines" = "CDC panel reviews vaccines" = "Vaccine committee meeting" 
-- "Trump nominee hearing" = "CDC nominee Senate" = "Nominee grilled" = "Pick faces questions"
-- "Cancer drugs fail" = "Generic drugs quality" = "Chemo drugs fail tests"
-- "X partners Y" = "Y deal with X" = "X and Y announce"
-- "Kymera Gilead deal" = "Kymera partners Gilead" = "Gilead Kymera partnership"
+        categories_str = ", ".join(CATEGORIES)
+        prompt = f"""Analyze these headlines for a BIOTECH/PHARMA industry digest.
 
-Mark ALL BUT ONE as SKIP for each duplicate group. Keep the most informative version.
+TASK 1 - RELEVANCE: Mark OFF-TOPIC items that don't belong in a biotech/pharma digest:
+- General consumer health (school lunches, diet trends, fitness tips)
+- Mental health lifestyle content (social media and mental health)
+- Non-industry wellness/nutrition advice
+- General news that happens to mention health tangentially
 
-CATEGORIES:
-- Regulatory & FDA: FDA/CDC decisions, drug approvals, vaccine policies
-- Clinical & Research: Trials, research findings, scientific papers
-- Deals & Finance: M&A, partnerships, funding, IPOs
-- Company News: Executive changes, layoffs, company updates
-- Policy & Politics: Government policy, political appointments, hearings
-- Market Insights: Market analysis, industry trends, forecasts
+TASK 2 - DUPLICATES: Mark duplicate stories about the SAME EVENT:
+- "FDA approves drug" = "Drug gets FDA nod" = "Regulatory approval for drug"
+- "Company A acquires B" = "B bought by A" = "A-B merger complete"
+Keep the most informative version.
+
+TASK 3 - CATEGORIZE remaining items:
+- Regulatory & FDA: FDA/EMA approvals, rejections, submissions, regulatory decisions
+- Clinical & Research: Clinical trials, study results, drug mechanisms, research findings
+- Deals & Finance: M&A, funding rounds, partnerships, licensing deals, financial news
+- Company News: Leadership changes, layoffs, company strategies, lawsuits, product launches, devices
+- Policy & Politics: Government policy, legislation, NIH/CDC decisions, healthcare reform
+- Market Insights: Industry trends, market analysis, forecasts, rankings
 
 Items:
 {items_text}
 
-For each item, respond with ONLY:
-- The category name (if keeping)
-- SKIP (if duplicate)
+For each item, respond with ONLY ONE of:
+- Category name (if relevant and keeping)
+- SKIP (if duplicate or off-topic)
 
-One per line. Be VERY aggressive marking duplicates."""
+One per line."""
 
         resp = client.chat.completions.create(
-            model="gpt-5-mini",
+            model=OPENAI_MODEL,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
         )
-        
-        # Parse categorization response
-        response_text = resp.choices[0].message.content.strip()
-        print(f"📊 LLM categorization response received")
-        
-        lines = [line.strip() for line in response_text.split('\n') if line.strip()]
-        
-        # Valid categories
-        valid_categories = [
-            "Regulatory & FDA",
-            "Clinical & Research", 
-            "Deals & Finance",
-            "Company News",
-            "Policy & Politics",
-            "Market Insights"
-        ]
-        
+
+        content = resp.choices[0].message.content
+        if not content:
+            logger.warning("Empty LLM response for categorization")
+            for item in items:
+                item["category"] = _keyword_categorize(item["title"])
+            items = _run_keyword_dedup(items)
+            state["items"] = items
+            return state
+        response_text = content.strip()
+        logger.info("LLM categorization response received")
+
+        lines = [line.strip() for line in response_text.split("\n") if line.strip()]
+
         # First pass: LLM categorization
         for i, line in enumerate(lines):
-            if i >= len(state["items"]):
+            if i >= len(items):
                 break
-            
-            # Check for SKIP
+
             if "SKIP" in line.upper():
-                state["items"][i]["skip"] = True
-                state["items"][i]["skip_reason"] = "duplicate"
+                items[i]["skip"] = True
+                items[i]["skip_reason"] = "duplicate"
                 continue
-            
-            # Check for exact category match
+
+            # Check for category match
             category_found = False
-            for valid_cat in valid_categories:
+            for valid_cat in CATEGORIES:
                 if valid_cat.lower() in line.lower():
-                    state["items"][i]["category"] = valid_cat
+                    items[i]["category"] = valid_cat
                     category_found = True
                     break
-            
-            # If no match found, use default based on keywords
+
             if not category_found:
-                title = state["items"][i]["title"].lower()
-                
-                # More specific keyword matching
-                if any(word in title for word in ["fda", "approve", "reject", "cdc advise", "regulatory"]):
-                    state["items"][i]["category"] = "Regulatory & FDA"
-                elif any(word in title for word in ["trial", "phase", "study", "research", "efficacy", "therapy"]):
-                    state["items"][i]["category"] = "Clinical & Research"
-                elif any(word in title for word in ["partner", "deal", "raise", "funding", "$", "acquisition"]):
-                    state["items"][i]["category"] = "Deals & Finance"
-                elif any(word in title for word in ["layoff", "cuts", "ceo", "executive", "hire"]):
-                    state["items"][i]["category"] = "Company News"
-                elif any(word in title for word in ["trump", "congress", "medicare", "medicaid", "policy", "politics"]):
-                    state["items"][i]["category"] = "Policy & Politics"
-                elif any(word in title for word in ["market", "spending", "forecast", "trend", "billion", "long game"]):
-                    state["items"][i]["category"] = "Market Insights"
-                else:
-                    state["items"][i]["category"] = "Company News"
-        
-        # Second pass: Additional duplicate detection based on key terms
-        seen_topics = {}
-        for i, item in enumerate(state["items"]):
-            if item.get("skip"):
-                continue
-                
-            title_lower = item["title"].lower()
-            
-            # Define topic signatures
-            topic_key = None
-            if all(word in title_lower for word in ["cdc", "vaccine"]) or all(word in title_lower for word in ["acip", "vaccine"]):
-                topic_key = "cdc_vaccine_panel"
-            elif "kymera" in title_lower and "gilead" in title_lower:
-                topic_key = "kymera_gilead_deal"
-            elif "trump" in title_lower and ("nominee" in title_lower or "cdc" in title_lower):
-                topic_key = "trump_cdc_nominee"
-            elif ("cancer" in title_lower or "chemo" in title_lower) and "drug" in title_lower:
-                topic_key = "cancer_drug_quality"
-                
-            if topic_key:
-                if topic_key in seen_topics:
-                    # Mark as duplicate
-                    item["skip"] = True
-                    item["skip_reason"] = f"duplicate of item {seen_topics[topic_key]}"
-                    print(f"📊 Additional duplicate found: {item['title']}")
-                else:
-                    seen_topics[topic_key] = i
-                    
-        # Remove skipped items
-        original_count = len(state["items"])
-        state["items"] = [item for item in state["items"] if not item.get("skip")]
-        
-        print(f"📊 After categorization: {len(state['items'])} items (skipped {original_count - len(state['items'])} duplicates)")
-        
-        # Debug: show categories assigned
-        cats = defaultdict(int)
-        for item in state["items"]:
+                items[i]["category"] = _keyword_categorize(items[i]["title"])
+
+        # Second pass: Keyword-based duplicate detection as safety net
+        original_count = len(items)
+        items = _run_keyword_dedup(items)
+        state["items"] = items
+
+        logger.info(
+            f"After categorization: {len(items)} items "
+            f"(skipped {original_count - len(items)} duplicates)"
+        )
+
+        # Log category distribution
+        cats: Dict[str, int] = defaultdict(int)
+        for item in items:
             cats[item.get("category", "Unknown")] += 1
-        print(f"📊 Category distribution: {dict(cats)}")
-        
+        logger.info(f"Category distribution: {dict(cats)}")
+
     except Exception as exc:
-        print(f"⚠️  Categorization error: {exc}")
-        import traceback
-        traceback.print_exc()
-        
-        # Set default varied categories on error
-        categories = ["Company News", "Clinical & Research", "Regulatory & FDA"]
-        for i, item in enumerate(state.get("items", [])):
-            item["category"] = categories[i % len(categories)]
-    
+        logger.warning(f"Categorization error: {exc}")
+        for item in items:
+            item["category"] = _keyword_categorize(item["title"])
+        items = _run_keyword_dedup(items)
+        state["items"] = items
+
     return state
+
+
+def _keyword_categorize(title: str) -> str:
+    """Fallback keyword-based categorization."""
+    title_lower = title.lower()
+
+    if any(word in title_lower for word in ["fda", "approve", "reject", "ema", "regulatory"]):
+        return "Regulatory & FDA"
+    if any(word in title_lower for word in ["trial", "phase", "study", "efficacy", "therapy", "research"]):
+        return "Clinical & Research"
+    if any(word in title_lower for word in ["partner", "deal", "raise", "funding", "$", "acquisition", "ipo", "merger"]):
+        return "Deals & Finance"
+    if any(word in title_lower for word in ["layoff", "cuts", "ceo", "executive", "hire", "appoint"]):
+        return "Company News"
+    if any(word in title_lower for word in ["trump", "congress", "medicare", "medicaid", "policy", "legislation"]):
+        return "Policy & Politics"
+    if any(word in title_lower for word in ["market", "spending", "forecast", "trend", "billion", "outlook"]):
+        return "Market Insights"
+
+    # Check for company names -> Company News
+    if any(company in title_lower for company in COMPANY_NAMES):
+        return "Company News"
+
+    return "Company News"
 
 
 def node_render(state: DigestState) -> DigestState:
     items = state.get("items", [])
-    print(f"📊 Rendering {len(items)} items")
+    logger.info(f"Rendering {len(items)} items")
     markdown = to_markdown(items)
     Path("news.md").write_text(markdown, encoding="utf-8")
     state["markdown"] = markdown

@@ -15,6 +15,10 @@
     "category": "All",
     "source": "FierceBiotech"
   },
+  "https://www.fiercepharma.com/rss/xml": {
+    "category": "All",
+    "source": "FiercePharma"
+  },
   "https://www.nature.com/nrd.rss": {
     "category": "All",
     "source": "Nature Reviews Drug Discovery"
@@ -22,5 +26,9 @@
   "https://www.biopharmadive.com/feeds/news/": {
     "category": "All",
     "source": "BioPharma Dive"
+  },
+  "https://www.genengnews.com/feed/": {
+    "category": "All",
+    "source": "GEN News"
   }
 }
