@@ -10,16 +10,41 @@ from dotenv import load_dotenv
 _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(_ENV_FILE)
 
+
+def _get_env_str(name: str, default: str) -> str:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    value = value.strip()
+    return value or default
+
+
+def _get_env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {value!r}") from exc
+
+
 # ── OpenAI ───────────────────────────────────────────────────────
-OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+OPENAI_API_KEY: str = _get_env_str("OPENAI_API_KEY", "")
+OPENAI_MODEL: str = _get_env_str("OPENAI_MODEL", "gpt-5-mini")
+OPENAI_TIMEOUT_SECONDS: int = _get_env_int("OPENAI_TIMEOUT_SECONDS", 30)
+OPENAI_RETRIES: int = _get_env_int("OPENAI_RETRIES", 2)
+SHORTIFY_BATCH_SIZE: int = _get_env_int("SHORTIFY_BATCH_SIZE", 20)
+DIGEST_OUTPUT_FILE: str = _get_env_str("DIGEST_OUTPUT_FILE", "news.md")
 
 # ── Pipeline limits ──────────────────────────────────────────────
-PAPER_LIMIT: int = int(os.getenv("PAPER_LIMIT", "7"))
+PAPER_LIMIT: int = _get_env_int("PAPER_LIMIT", 7)
 
 # ── RSS settings ─────────────────────────────────────────────────
-RSS_TIMEOUT: int = int(os.getenv("RSS_TIMEOUT", "10"))
-RSS_RETRIES: int = int(os.getenv("RSS_RETRIES", "2"))
+RSS_TIMEOUT: int = _get_env_int("RSS_TIMEOUT", 10)
+RSS_RETRIES: int = _get_env_int("RSS_RETRIES", 2)
+RSS_MAX_WORKERS: int = _get_env_int("RSS_MAX_WORKERS", 8)
+RSS_MAX_FEED_BYTES: int = _get_env_int("RSS_MAX_FEED_BYTES", 5_000_000)
 RSS_USER_AGENT: str = "bio-news-agent/1.0 (+https://github.com/bio-news-agent)"
 
 # ── Categories ───────────────────────────────────────────────────
@@ -64,4 +89,7 @@ COMPANY_NAMES: List[str] = [
 
 # ── Source limits ──────────────────────────────────────────────
 # Maximum items per source (0 = no limit)
-MAX_ITEMS_PER_SOURCE: int = int(os.getenv("MAX_ITEMS_PER_SOURCE", "8"))
+MAX_ITEMS_PER_SOURCE: int = _get_env_int("MAX_ITEMS_PER_SOURCE", 8)
+
+# ── Logging ─────────────────────────────────────────────────────
+LOG_LEVEL: str = _get_env_str("LOG_LEVEL", "INFO")

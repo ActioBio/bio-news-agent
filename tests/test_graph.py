@@ -1,7 +1,10 @@
 """Tests for graph module."""
 
+from datetime import datetime, timezone
+
 import pytest
-from graph import _extract_keywords, _keyword_categorize
+import graph
+from graph import _extract_keywords, _keyword_categorize, node_render
 
 
 class TestExtractKeywords:
@@ -79,3 +82,23 @@ class TestKeywordCategorize:
 
     def test_default_category(self):
         assert _keyword_categorize("Random headline here") == "Company News"
+
+
+def test_node_render_writes_to_configured_output(tmp_path, monkeypatch):
+    output_file = tmp_path / "news.md"
+    monkeypatch.setattr(graph, "_NEWS_FILE", output_file)
+    state = {
+        "items": [
+            {
+                "title": "Title",
+                "link": "https://example.com",
+                "source": "Example",
+                "category": "Company News",
+                "published": datetime(2026, 1, 1, tzinfo=timezone.utc),
+            }
+        ]
+    }
+
+    result = node_render(state)
+    assert output_file.exists()
+    assert result["markdown"]

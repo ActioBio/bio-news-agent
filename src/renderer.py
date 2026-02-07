@@ -1,16 +1,19 @@
 """Render news items to markdown."""
 
 from collections import defaultdict
-from typing import Any, Dict, List
+from typing import Any
 
-from config import CATEGORIES
+try:
+    from config import CATEGORIES
+except ModuleNotFoundError:  # pragma: no cover - module execution fallback
+    from .config import CATEGORIES
 
 
-def to_markdown(items: List[Dict[str, Any]]) -> str:
+def to_markdown(items: list[dict[str, Any]]) -> str:
     if not items:
         return "_No fresh biotech/pharma headlines in the last 24 h._"
 
-    sections: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    sections: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for it in items:
         cat = it.get("category", "Other")
         # Map unknown categories to "Other"

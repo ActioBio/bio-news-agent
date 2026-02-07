@@ -9,27 +9,64 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, TypedDict
 
-from openai import OpenAI
 from langgraph.graph import StateGraph
-
-from collector import collect_items
-from config import (
-    CATEGORIES,
-    COMPANY_NAMES,
-    MAX_ITEMS_PER_SOURCE,
-    OPENAI_API_KEY,
-    OPENAI_MODEL,
-    PAPER_LIMIT,
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    InternalServerError,
+    OpenAI,
+    RateLimitError,
 )
-from filterer import deduplicate
-from renderer import to_markdown
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+
+try:
+    from collector import collect_items
+    from config import (
+        CATEGORIES,
+        COMPANY_NAMES,
+        DIGEST_OUTPUT_FILE,
+        MAX_ITEMS_PER_SOURCE,
+        OPENAI_API_KEY,
+        OPENAI_MODEL,
+        OPENAI_RETRIES,
+        OPENAI_TIMEOUT_SECONDS,
+        PAPER_LIMIT,
+        SHORTIFY_BATCH_SIZE,
+    )
+    from filterer import deduplicate
+    from renderer import to_markdown
+except ModuleNotFoundError:  # pragma: no cover - module execution fallback
+    from .collector import collect_items
+    from .config import (
+        CATEGORIES,
+        COMPANY_NAMES,
+        DIGEST_OUTPUT_FILE,
+        MAX_ITEMS_PER_SOURCE,
+        OPENAI_API_KEY,
+        OPENAI_MODEL,
+        OPENAI_RETRIES,
+        OPENAI_TIMEOUT_SECONDS,
+        PAPER_LIMIT,
+        SHORTIFY_BATCH_SIZE,
+    )
+    from .filterer import deduplicate
+    from .renderer import to_markdown
 
 logger = logging.getLogger(__name__)
 
-BATCH_SIZE = 20
+
+def _resolve_output_file(path_value: str) -> Path:
+    output = Path(path_value)
+    if output.is_absolute():
+        return output
+    return (Path(__file__).resolve().parent.parent / output).resolve()
+
+
+_NEWS_FILE = _resolve_output_file(DIGEST_OUTPUT_FILE)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -37,6 +74,42 @@ BATCH_SIZE = 20
 class DigestState(TypedDict, total=False):
     items: List[Dict[str, Any]]
     markdown: str
+
+
+def _log_openai_retry(retry_state) -> None:
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    logger.warning(
+        "OpenAI request attempt %s failed, retrying: %s",
+        retry_state.attempt_number,
+        exc,
+    )
+
+
+@lru_cache(maxsize=1)
+def _get_openai_client(api_key: str) -> OpenAI:
+    return OpenAI(api_key=api_key, timeout=OPENAI_TIMEOUT_SECONDS)
+
+
+@retry(
+    stop=stop_after_attempt(OPENAI_RETRIES + 1),
+    wait=wait_exponential(multiplier=1, min=1, max=20),
+    retry=retry_if_exception_type(
+        (APITimeoutError, APIConnectionError, RateLimitError, InternalServerError)
+    ),
+    before_sleep=_log_openai_retry,
+    reraise=True,
+)
+def _chat_completion_text(client: OpenAI, prompt: str) -> str:
+    response = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    content = response.choices[0].message.content
+    return content.strip() if content else ""
+
+
+def _strip_line_number(line: str) -> str:
+    return re.sub(r"^\d+[\.\):\-]\s*", "", line).strip()
 
 
 # ──────────────────────────────────────────────────────────────
@@ -98,12 +171,11 @@ def node_shortify(state: DigestState) -> DigestState:
         logger.warning("No items to shortify")
         return state
 
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    client = _get_openai_client(OPENAI_API_KEY)
     shortified_count = 0
 
-    # Process in batches of BATCH_SIZE
-    for batch_start in range(0, len(items), BATCH_SIZE):
-        batch = items[batch_start : batch_start + BATCH_SIZE]
+    for batch_start in range(0, len(items), SHORTIFY_BATCH_SIZE):
+        batch = items[batch_start : batch_start + SHORTIFY_BATCH_SIZE]
 
         # Build batch prompt
         titles_list = "\n".join(
@@ -117,35 +189,51 @@ Rules:
 - Remove source attributions, company descriptors
 - Keep drug names, company names, key numbers
 
-{titles_list}
+        {titles_list}
 
 Return ONLY shortened headlines, numbered (1. headline, 2. headline, etc.)"""
 
         try:
-            resp = client.chat.completions.create(
-                model=OPENAI_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            content = resp.choices[0].message.content
-            if not content:
+            response_text = _chat_completion_text(client, prompt)
+            if not response_text:
+                logger.warning(
+                    "Empty shortify response for batch [%s:%s]",
+                    batch_start,
+                    batch_start + len(batch),
+                )
                 continue
-            response_text = content.strip()
 
             # Parse response
             lines = [
-                re.sub(r"^\d+\.\s*", "", line.strip())
+                _strip_line_number(line.strip())
                 for line in response_text.split("\n")
-                if line.strip() and re.match(r"^\d+\.", line.strip())
+                if line.strip()
             ]
 
+            if len(lines) != len(batch):
+                logger.warning(
+                    "Shortify line mismatch for batch [%s:%s]: expected %s, got %s",
+                    batch_start,
+                    batch_start + len(batch),
+                    len(batch),
+                    len(lines),
+                )
+
             # Apply shortened titles
-            for i, new_title in enumerate(lines):
-                if i < len(batch) and new_title:
-                    batch[i]["title"] = new_title
+            for i, item in enumerate(batch):
+                if i < len(lines) and lines[i]:
+                    item["title"] = lines[i]
                     shortified_count += 1
+                else:
+                    logger.warning("No shortened title for: %s", item["title"][:80])
 
         except Exception as exc:
-            logger.warning(f"LLM error for batch starting at {batch_start}: {exc}")
+            logger.warning(
+                "LLM shortify batch error [%s:%s]: %s",
+                batch_start,
+                batch_start + len(batch),
+                exc,
+            )
 
     logger.info(f"Shortified {shortified_count}/{len(items)} items")
     return state
@@ -196,8 +284,9 @@ def _extract_entities(title: str) -> set[str]:
         word_lower = word.lower().rstrip(",'s")
         if word_lower in company_suffixes and i > 0:
             # Include the word before the suffix as part of company name
-            prev_word = words[i - 1].rstrip(",'s").lower()
-            if prev_word and prev_word[0].isupper() or len(prev_word) > 2:
+            prev_word_raw = words[i - 1].rstrip(",'s")
+            prev_word = prev_word_raw.lower()
+            if prev_word_raw and (prev_word_raw[0].isupper() or len(prev_word) > 2):
                 entities.add(f"{prev_word}_{word_lower}")
 
     # Also extract standalone capitalized proper nouns that might be companies
@@ -292,7 +381,7 @@ def node_categorize(state: DigestState) -> DigestState:
         return state
 
     try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
+        client = _get_openai_client(OPENAI_API_KEY)
 
         # Create item list
         items_text = "\n".join(
@@ -331,44 +420,47 @@ For each item, respond with ONLY ONE of:
 
 One per line."""
 
-        resp = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-        content = resp.choices[0].message.content
-        if not content:
+        response_text = _chat_completion_text(client, prompt)
+        if not response_text:
             logger.warning("Empty LLM response for categorization")
             for item in items:
                 item["category"] = _keyword_categorize(item["title"])
             items = _run_keyword_dedup(items)
             state["items"] = items
             return state
-        response_text = content.strip()
         logger.info("LLM categorization response received")
 
-        lines = [line.strip() for line in response_text.split("\n") if line.strip()]
+        lines = [_strip_line_number(line) for line in response_text.split("\n") if line.strip()]
+        if len(lines) != len(items):
+            logger.warning(
+                "LLM response line mismatch: expected %s, got %s",
+                len(items),
+                len(lines),
+            )
 
         # First pass: LLM categorization
-        for i, line in enumerate(lines):
-            if i >= len(items):
-                break
+        for i, item in enumerate(items):
+            if i >= len(lines):
+                item["category"] = _keyword_categorize(item["title"])
+                continue
+
+            line = lines[i]
 
             if "SKIP" in line.upper():
-                items[i]["skip"] = True
-                items[i]["skip_reason"] = "duplicate"
+                item["skip"] = True
+                item["skip_reason"] = "duplicate"
                 continue
 
             # Check for category match
             category_found = False
             for valid_cat in CATEGORIES:
                 if valid_cat.lower() in line.lower():
-                    items[i]["category"] = valid_cat
+                    item["category"] = valid_cat
                     category_found = True
                     break
 
             if not category_found:
-                items[i]["category"] = _keyword_categorize(items[i]["title"])
+                item["category"] = _keyword_categorize(item["title"])
 
         # Second pass: Keyword-based duplicate detection as safety net
         original_count = len(items)
@@ -387,7 +479,10 @@ One per line."""
         logger.info(f"Category distribution: {dict(cats)}")
 
     except Exception as exc:
-        logger.warning(f"Categorization error: {exc}")
+        logger.error(
+            "Categorization error: %s. Falling back to keyword categorization.",
+            exc,
+        )
         for item in items:
             item["category"] = _keyword_categorize(item["title"])
         items = _run_keyword_dedup(items)
@@ -424,7 +519,7 @@ def node_render(state: DigestState) -> DigestState:
     items = state.get("items", [])
     logger.info(f"Rendering {len(items)} items")
     markdown = to_markdown(items)
-    Path("news.md").write_text(markdown, encoding="utf-8")
+    _NEWS_FILE.write_text(markdown, encoding="utf-8")
     state["markdown"] = markdown
     return state
 

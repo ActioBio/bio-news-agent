@@ -6,7 +6,7 @@ permissions:
 
 on:
   schedule:
-    - cron: "0 13 * * *"        # 09:00 America/New_York
+    - cron: "0 13 * * *"        # 08:00 EST / 09:00 EDT (America/New_York)
   workflow_dispatch:
 
 jobs:
@@ -15,6 +15,8 @@ jobs:
     env:
       PYTHONPATH: src
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+      DIGEST_OUTPUT_FILE: news.md
 
     steps:
       - uses: actions/checkout@v4
@@ -27,6 +29,13 @@ jobs:
         
       - name: Install dependencies
         run: uv sync --locked
+
+      - name: Validate required secrets
+        run: |
+          if [ -z "${OPENAI_API_KEY}" ]; then
+            echo "Missing OPENAI_API_KEY secret." >&2
+            exit 1
+          fi
         
       - name: Build digest with LangGraph
         run: uv run python src/main.py
@@ -37,7 +46,8 @@ jobs:
           script: |
             const fs = require('fs');
             const today = new Date().toISOString().slice(0,10);
-            let body  = fs.readFileSync('news.md','utf8');
+            const digestPath = process.env.DIGEST_OUTPUT_FILE || 'news.md';
+            let body  = fs.readFileSync(digestPath,'utf8');
             if (body.length > 65000) {
               body = body.slice(0, 65000) + '\n\n*(truncated)*';
             }

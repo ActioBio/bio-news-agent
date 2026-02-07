@@ -1,6 +1,9 @@
 """Tests for collector module."""
 
+from datetime import datetime, timezone
+
 import pytest
+import collector
 from collector import normalize_url
 
 
@@ -45,3 +48,49 @@ class TestNormalizeUrl:
         result = normalize_url(url)
         assert "utm_campaign" not in result
         assert "page" in result
+
+
+def test_parse_date_uses_utc_tuple():
+    entry = {"published_parsed": (2026, 2, 6, 12, 0, 0, 0, 0, 0)}
+    parsed = collector._parse_date(entry)
+    assert parsed == datetime(2026, 2, 6, 12, 0, tzinfo=timezone.utc)
+
+
+def test_collect_items_keeps_entries_when_bozo(monkeypatch):
+    class Parsed:
+        bozo = True
+        bozo_exception = Exception("encoding warning")
+        entries = [
+            {
+                "published_parsed": (2026, 2, 6, 12, 0, 0, 0, 0, 0),
+                "title": "Valid story",
+                "link": "https://example.com/story?utm_source=newsletter",
+            }
+        ]
+
+    monkeypatch.setattr(
+        collector,
+        "_load_feeds",
+        lambda: {"https://feed.example.com/rss": {"source": "Example Feed", "category": "All"}},
+    )
+    monkeypatch.setattr(collector, "_fetch_with_retry", lambda _url: Parsed())
+    monkeypatch.setattr(
+        collector,
+        "_now",
+        lambda: datetime(2026, 2, 6, 13, 0, tzinfo=timezone.utc),
+    )
+
+    items = collector.collect_items()
+    assert len(items) == 1
+    assert items[0]["id"] == "https://example.com/story"
+    assert items[0]["source"] == "Example Feed"
+
+
+def test_load_feeds_defaults_missing_source(tmp_path, monkeypatch):
+    feeds_path = tmp_path / "feeds.json"
+    feeds_path.write_text('{"https://example.com/rss":{"category":"All"}}', encoding="utf-8")
+
+    monkeypatch.setattr(collector, "_FEEDS_FILE", feeds_path)
+    feeds = collector._load_feeds()
+
+    assert feeds["https://example.com/rss"]["source"] == "example.com"
