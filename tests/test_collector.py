@@ -1,8 +1,8 @@
 """Tests for collector module."""
 
 from datetime import datetime, timezone
+from urllib.error import URLError
 
-import pytest
 import collector
 from collector import normalize_url
 
@@ -18,7 +18,6 @@ class TestNormalizeUrl:
 
     def test_lowercases_domain_only(self):
         url = "https://Example.COM/Article"
-        # Domain lowercased, but path case preserved
         assert normalize_url(url) == "https://example.com/Article"
 
     def test_removes_utm_parameters(self):
@@ -65,13 +64,20 @@ def test_collect_items_keeps_entries_when_bozo(monkeypatch):
                 "published_parsed": (2026, 2, 6, 12, 0, 0, 0, 0, 0),
                 "title": "Valid story",
                 "link": "https://example.com/story?utm_source=newsletter",
+                "summary": "<p>Valid <b>summary</b></p>",
             }
         ]
 
     monkeypatch.setattr(
         collector,
         "_load_feeds",
-        lambda: {"https://feed.example.com/rss": {"source": "Example Feed", "category": "All"}},
+        lambda: {
+            "https://feed.example.com/rss": {
+                "source": "Example Feed",
+                "category": "All",
+                "type": "paper",
+            }
+        },
     )
     monkeypatch.setattr(collector, "_fetch_with_retry", lambda _url: Parsed())
     monkeypatch.setattr(
@@ -84,6 +90,9 @@ def test_collect_items_keeps_entries_when_bozo(monkeypatch):
     assert len(items) == 1
     assert items[0]["id"] == "https://example.com/story"
     assert items[0]["source"] == "Example Feed"
+    assert items[0]["original_title"] == "Valid story"
+    assert items[0]["summary"] == "Valid summary"
+    assert items[0]["source_type"] == "paper"
 
 
 def test_load_feeds_defaults_missing_source(tmp_path, monkeypatch):
@@ -94,3 +103,50 @@ def test_load_feeds_defaults_missing_source(tmp_path, monkeypatch):
     feeds = collector._load_feeds()
 
     assert feeds["https://example.com/rss"]["source"] == "example.com"
+    assert feeds["https://example.com/rss"]["type"] == "news"
+
+
+def test_collect_items_skips_failed_feeds(monkeypatch):
+    class Parsed:
+        bozo = False
+        entries = [
+            {
+                "published_parsed": (2026, 2, 6, 12, 0, 0, 0, 0, 0),
+                "title": "Healthy story",
+                "link": "https://example.com/healthy",
+            }
+        ]
+
+    monkeypatch.setattr(
+        collector,
+        "_load_feeds",
+        lambda: {
+            "https://bad.example.com/rss": {
+                "source": "Bad Feed",
+                "category": "All",
+                "type": "news",
+            },
+            "https://good.example.com/rss": {
+                "source": "Good Feed",
+                "category": "All",
+                "type": "news",
+            },
+        },
+    )
+
+    def fake_fetch(url: str):
+        if "bad.example.com" in url:
+            raise URLError("feed down")
+        return Parsed()
+
+    monkeypatch.setattr(collector, "_fetch_with_retry", fake_fetch)
+    monkeypatch.setattr(
+        collector,
+        "_now",
+        lambda: datetime(2026, 2, 6, 13, 0, tzinfo=timezone.utc),
+    )
+
+    items = collector.collect_items()
+
+    assert len(items) == 1
+    assert items[0]["source"] == "Good Feed"

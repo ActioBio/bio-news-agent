@@ -1,8 +1,10 @@
 """RSS feed collector with URL normalization and retry logic."""
 
 import calendar
+import html
 import json
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -86,7 +88,13 @@ def _load_feeds() -> dict[str, dict[str, str]]:
             source = urlparse(raw_url).netloc or "Unknown Source"
             logger.warning("Feed %s missing source; using %s", raw_url, source)
 
-        validated[raw_url] = {"source": source, "category": category}
+        source_type = str(raw_meta.get("type", "news")).strip().lower() or "news"
+
+        validated[raw_url] = {
+            "source": source,
+            "category": category,
+            "type": source_type,
+        }
 
     logger.info("Loaded %d valid feeds from feeds.json", len(validated))
     return validated
@@ -124,6 +132,15 @@ def _parse_date(entry: dict[str, Any]) -> datetime | None:
     return None
 
 
+def _clean_summary(value: Any) -> str:
+    if not value:
+        return ""
+
+    text = html.unescape(str(value))
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _log_retry(retry_state) -> None:
     exc = retry_state.outcome.exception() if retry_state.outcome else None
     logger.warning("Fetch attempt %s failed, retrying: %s", retry_state.attempt_number, exc)
@@ -155,15 +172,16 @@ def _fetch_with_retry(url: str) -> feedparser.FeedParserDict:
 def _fetch_feed_entries(
     url: str,
     meta: dict[str, str],
-) -> tuple[str, str, list[dict[str, Any]]]:
+) -> tuple[str, str, str, list[dict[str, Any]]]:
     category = meta.get("category", "All")
     source = meta.get("source", urlparse(url).netloc or "Unknown Source")
+    source_type = meta.get("type", "news")
     try:
         logger.info("Fetching %s...", source)
         parsed = _fetch_with_retry(url)
     except Exception as exc:
         logger.warning("Feed error for %s: %s", url, exc)
-        return source, category, []
+        return source, category, source_type, []
 
     if parsed.bozo:
         logger.warning(
@@ -174,7 +192,7 @@ def _fetch_feed_entries(
 
     entries = list(parsed.entries) if hasattr(parsed, "entries") else []
     logger.info("Found %d entries from %s", len(entries), source)
-    return source, category, entries
+    return source, category, source_type, entries
 
 
 def collect_items() -> list[dict[str, Any]]:
@@ -183,7 +201,7 @@ def collect_items() -> list[dict[str, Any]]:
     logger.info("Collecting items newer than %s", cutoff)
     items: list[dict[str, Any]] = []
     feeds = _load_feeds()
-    feed_results: list[tuple[str, str, list[dict[str, Any]]]] = []
+    feed_results: list[tuple[str, str, str, list[dict[str, Any]]]] = []
 
     max_workers = max(1, min(RSS_MAX_WORKERS, len(feeds)))
     if max_workers == 1:
@@ -198,7 +216,7 @@ def collect_items() -> list[dict[str, Any]]:
             for future in as_completed(futures):
                 feed_results.append(future.result())
 
-    for source, category, entries in feed_results:
+    for source, category, source_type, entries in feed_results:
         for entry in entries:
             published = _parse_date(entry)
             if not published or published < cutoff:
@@ -209,14 +227,18 @@ def collect_items() -> list[dict[str, Any]]:
                 continue
 
             normalized_link = normalize_url(link)
+            summary = _clean_summary(entry.get("summary") or entry.get("description") or "")
             items.append(
                 {
                     "id": normalized_link,
                     "title": title,
+                    "original_title": title,
                     "link": link,
                     "source": source,
                     "published": published,
                     "category": category,
+                    "summary": summary,
+                    "source_type": source_type,
                 }
             )
 

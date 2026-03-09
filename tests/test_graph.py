@@ -1,87 +1,188 @@
 """Tests for graph module."""
 
+import json
 from datetime import datetime, timezone
 
-import pytest
 import graph
-from graph import _extract_keywords, _keyword_categorize, node_render
+from graph import (
+    _build_candidate_groups,
+    _is_high_confidence_duplicate,
+    _keyword_categorize,
+    build_graph,
+    node_categorize,
+    node_render,
+)
 
 
-class TestExtractKeywords:
-    def test_extracts_significant_words(self):
-        title = "Pfizer announces new drug trial results"
-        keywords = _extract_keywords(title)
-        assert "pfizer" in keywords
-        assert "announces" in keywords
-        assert "drug" in keywords
-        assert "trial" in keywords
-        assert "results" in keywords
-
-    def test_filters_stopwords(self):
-        title = "The company is in the market"
-        keywords = _extract_keywords(title)
-        assert "the" not in keywords
-        assert "is" not in keywords
-        assert "in" not in keywords
-        assert "company" in keywords
-        assert "market" in keywords
-
-    def test_filters_short_words(self):
-        title = "FDA ok for new med"
-        keywords = _extract_keywords(title)
-        assert "fda" not in keywords  # 3 chars
-        assert "ok" not in keywords   # 2 chars
-        assert "for" not in keywords  # stopword
-        assert "new" not in keywords  # stopword
-        assert "med" not in keywords  # 3 chars
-
-    def test_lowercases_words(self):
-        title = "MODERNA Vaccine Shows EFFICACY"
-        keywords = _extract_keywords(title)
-        assert "moderna" in keywords
-        assert "MODERNA" not in keywords
-        assert "vaccine" in keywords
-        assert "efficacy" in keywords
+def _item(
+    item_id: str,
+    title: str,
+    hour: int,
+    *,
+    source: str = "Example",
+    summary: str = "",
+    category: str = "All",
+    source_type: str = "news",
+) -> dict[str, object]:
+    return {
+        "id": item_id,
+        "title": title,
+        "original_title": title,
+        "link": f"https://example.com/{item_id}",
+        "source": source,
+        "published": datetime(2026, 1, 1, hour, 0, tzinfo=timezone.utc),
+        "category": category,
+        "summary": summary,
+        "source_type": source_type,
+    }
 
 
-class TestKeywordCategorize:
-    def test_regulatory_fda(self):
-        assert _keyword_categorize("FDA approves new drug") == "Regulatory & FDA"
-        assert _keyword_categorize("Drug gets regulatory approval") == "Regulatory & FDA"
-        assert _keyword_categorize("EMA rejects application") == "Regulatory & FDA"
+def test_keyword_categorize_regulatory():
+    assert _keyword_categorize("FDA approves new drug") == "Regulatory & FDA"
+    assert _keyword_categorize("Drug gets regulatory approval") == "Regulatory & FDA"
 
-    def test_clinical_research(self):
-        assert _keyword_categorize("Phase 3 trial shows results") == "Clinical & Research"
-        assert _keyword_categorize("Study finds new efficacy data") == "Clinical & Research"
-        assert _keyword_categorize("Therapy shows promise in research") == "Clinical & Research"
 
-    def test_deals_finance(self):
-        assert _keyword_categorize("Company raises $100M") == "Deals & Finance"
-        assert _keyword_categorize("Merger deal announced") == "Deals & Finance"
-        assert _keyword_categorize("Acquisition of startup") == "Deals & Finance"
-        assert _keyword_categorize("IPO pricing announced") == "Deals & Finance"
+def test_keyword_categorize_clinical():
+    assert _keyword_categorize("Phase 3 trial shows results") == "Clinical & Research"
+    assert _keyword_categorize("Therapy shows promise in research") == "Clinical & Research"
 
-    def test_company_news(self):
-        assert _keyword_categorize("CEO steps down") == "Company News"
-        assert _keyword_categorize("Company layoffs announced") == "Company News"
-        assert _keyword_categorize("Executive hire at firm") == "Company News"
 
-    def test_policy_politics(self):
-        assert _keyword_categorize("Trump administration policy") == "Policy & Politics"
-        assert _keyword_categorize("Congress debates Medicare") == "Policy & Politics"
-        assert _keyword_categorize("New legislation proposed") == "Policy & Politics"
+def test_keyword_categorize_deals():
+    assert _keyword_categorize("Company raises $100M") == "Deals & Finance"
+    assert _keyword_categorize("Merger deal announced") == "Deals & Finance"
 
-    def test_market_insights(self):
-        assert _keyword_categorize("Market forecast for 2025") == "Market Insights"
-        assert _keyword_categorize("Industry spending trends") == "Market Insights"
-        assert _keyword_categorize("Billion dollar outlook") == "Market Insights"
 
-    def test_company_name_fallback(self):
-        assert _keyword_categorize("Pfizer announces something") == "Company News"
-        assert _keyword_categorize("Moderna updates investors") == "Company News"
+def test_keyword_categorize_company_name_fallback():
+    assert _keyword_categorize("Pfizer updates investors") == "Company News"
 
-    def test_default_category(self):
-        assert _keyword_categorize("Random headline here") == "Company News"
+
+def test_high_confidence_duplicate_requires_strong_overlap():
+    existing = {"title": "Pfizer elranatamab multiple myeloma bispecific update"}
+    candidate = {"title": "Pfizer elranatamab multiple myeloma bispecific results"}
+    assert _is_high_confidence_duplicate(existing, candidate)
+
+
+def test_high_confidence_duplicate_avoids_unrelated_company_stories():
+    existing = {"title": "Moderna wins FDA approval for RSV vaccine"}
+    candidate = {"title": "Moderna announces CFO departure"}
+    assert not _is_high_confidence_duplicate(existing, candidate)
+
+
+def test_build_candidate_groups_clusters_possible_duplicates():
+    items = [
+        _item(
+            "a",
+            "Pfizer announces phase 3 oncology trial results",
+            12,
+            source="Pfizer",
+            summary="Official release for the phase 3 oncology study",
+        ),
+        _item(
+            "b",
+            "Pfizer reports phase 3 oncology trial data",
+            11,
+            source="Endpoints News",
+            summary="Coverage of the same phase 3 oncology trial",
+        ),
+        _item(
+            "c",
+            "NIH announces new grants for rare disease research",
+            10,
+            source="NIH",
+        ),
+    ]
+
+    groups = _build_candidate_groups(items)
+
+    assert [len(group) for group in groups] == [2, 1]
+    assert {item["id"] for item in groups[0]} == {"a", "b"}
+
+
+def test_node_categorize_uses_structured_llm_response(monkeypatch):
+    items = [
+        _item(
+            "a",
+            "Pfizer announces phase 3 oncology trial results",
+            12,
+            source="Pfizer",
+            summary="Official release for the phase 3 oncology study",
+        ),
+        _item(
+            "b",
+            "Pfizer reports phase 3 oncology trial data",
+            11,
+            source="Endpoints News",
+            summary="Coverage of the same phase 3 oncology trial",
+        ),
+        _item(
+            "c",
+            "Hospital cafeterias debate protein shake trends",
+            10,
+            source="Lifestyle Weekly",
+        ),
+    ]
+    response = {
+        "groups": [
+            {
+                "group_id": "g1",
+                "off_topic_ids": [],
+                "clusters": [
+                    {
+                        "keep_id": "g1i1",
+                        "duplicate_ids": ["g1i2"],
+                        "category": "Clinical & Research",
+                        "short_title": "Pfizer posts oncology trial results",
+                    }
+                ],
+            },
+            {
+                "group_id": "g2",
+                "off_topic_ids": ["g2i1"],
+                "clusters": [],
+            },
+        ]
+    }
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(graph, "_get_openai_client", lambda _api_key: object())
+    monkeypatch.setattr(graph, "_chat_completion_text", lambda _client, _prompt: json.dumps(response))
+
+    result = node_categorize({"items": items})
+
+    assert len(result["items"]) == 1
+    assert result["items"][0]["title"] == "Pfizer posts oncology trial results"
+    assert result["items"][0]["category"] == "Clinical & Research"
+    assert result["items"][0]["original_title"] == "Pfizer announces phase 3 oncology trial results"
+
+
+def test_node_categorize_without_api_key_uses_local_resolution(monkeypatch):
+    items = [
+        _item("a", "Pfizer announces phase 3 oncology trial results", 12, source="Pfizer"),
+        _item("b", "Pfizer announces phase 3 oncology trial data", 11, source="Endpoints News"),
+    ]
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(graph, "CONFIG_OPENAI_API_KEY", "")
+
+    result = node_categorize({"items": items})
+
+    assert len(result["items"]) == 1
+    assert result["items"][0]["title"] == "Pfizer announces phase 3 oncology trial results"
+
+
+def test_build_graph_renders_empty_digest_when_collection_is_empty(tmp_path, monkeypatch):
+    output_file = tmp_path / "news.md"
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(graph, "CONFIG_OPENAI_API_KEY", "")
+    monkeypatch.setattr(graph, "_NEWS_FILE", output_file)
+    monkeypatch.setattr(graph, "collect_items", lambda: [])
+
+    result = build_graph().invoke({})
+
+    assert result["items"] == []
+    assert result["markdown"] == "_No fresh biotech/pharma headlines in the last 24 h._"
+    assert output_file.read_text(encoding="utf-8") == result["markdown"]
 
 
 def test_node_render_writes_to_configured_output(tmp_path, monkeypatch):

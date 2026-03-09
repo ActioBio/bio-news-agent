@@ -2,7 +2,6 @@
 
 import os
 from pathlib import Path
-from typing import List
 
 from dotenv import load_dotenv
 
@@ -34,7 +33,6 @@ OPENAI_API_KEY: str = _get_env_str("OPENAI_API_KEY", "")
 OPENAI_MODEL: str = _get_env_str("OPENAI_MODEL", "gpt-5-mini")
 OPENAI_TIMEOUT_SECONDS: int = _get_env_int("OPENAI_TIMEOUT_SECONDS", 30)
 OPENAI_RETRIES: int = _get_env_int("OPENAI_RETRIES", 2)
-SHORTIFY_BATCH_SIZE: int = _get_env_int("SHORTIFY_BATCH_SIZE", 20)
 DIGEST_OUTPUT_FILE: str = _get_env_str("DIGEST_OUTPUT_FILE", "news.md")
 
 # ── Pipeline limits ──────────────────────────────────────────────
@@ -48,7 +46,7 @@ RSS_MAX_FEED_BYTES: int = _get_env_int("RSS_MAX_FEED_BYTES", 5_000_000)
 RSS_USER_AGENT: str = "bio-news-agent/1.0 (+https://github.com/bio-news-agent)"
 
 # ── Categories ───────────────────────────────────────────────────
-CATEGORIES: List[str] = [
+CATEGORIES: list[str] = [
     "Regulatory & FDA",
     "Clinical & Research",
     "Deals & Finance",
@@ -58,7 +56,7 @@ CATEGORIES: List[str] = [
 ]
 
 # ── Bio/pharma company names for keyword detection ───────────────
-COMPANY_NAMES: List[str] = [
+COMPANY_NAMES: list[str] = [
     "pfizer",
     "moderna",
     "gilead",

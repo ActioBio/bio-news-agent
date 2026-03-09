@@ -8,6 +8,8 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - module execution fallback
     from .config import CATEGORIES
 
+_CATEGORY_ORDER = list(CATEGORIES)
+
 
 def to_markdown(items: list[dict[str, Any]]) -> str:
     if not items:
@@ -23,7 +25,7 @@ def to_markdown(items: list[dict[str, Any]]) -> str:
 
     lines = ["## Daily Biotech / Pharma Headlines\n"]
 
-    for cat in CATEGORIES:
+    for cat in _CATEGORY_ORDER:
         if cat not in sections:
             continue
         lines.append(f"### {cat}")
