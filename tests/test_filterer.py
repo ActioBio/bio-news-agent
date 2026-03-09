@@ -2,8 +2,7 @@
 
 from datetime import datetime, timezone
 
-import pytest
-from filterer import deduplicate
+from filterer import deduplicate, exclude_noise
 
 
 class TestDeduplicate:
@@ -43,3 +42,15 @@ class TestDeduplicate:
         result = deduplicate(items)
         assert len(result) == 1
         assert result[0]["title"] == "Newest"
+
+
+def test_exclude_noise_filters_opinion_and_sponsored_links():
+    items = [
+        {"title": "Opinion: hospital billing and biotech", "link": "https://example.com/news/1"},
+        {"title": "Clinical trial update", "link": "https://example.com/spons/paid-post"},
+        {"title": "FDA expands biosimilar guidance", "link": "https://example.com/news/2"},
+    ]
+
+    result, skipped = exclude_noise(items)
+    assert skipped == 2
+    assert result == [{"title": "FDA expands biosimilar guidance", "link": "https://example.com/news/2"}]

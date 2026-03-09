@@ -38,7 +38,7 @@ try:
         OPENAI_TIMEOUT_SECONDS,
         PAPER_LIMIT,
     )
-    from filterer import deduplicate
+    from filterer import deduplicate, exclude_noise
     from renderer import to_markdown
 except ModuleNotFoundError:  # pragma: no cover - module execution fallback
     from .collector import collect_items
@@ -53,7 +53,7 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
         OPENAI_TIMEOUT_SECONDS,
         PAPER_LIMIT,
     )
-    from .filterer import deduplicate
+    from .filterer import deduplicate, exclude_noise
     from .renderer import to_markdown
 
 logger = logging.getLogger(__name__)
@@ -462,6 +462,10 @@ def node_collect(state: DigestState) -> DigestState:
 def node_filter(state: DigestState) -> DigestState:
     items = deduplicate(state.get("items", []))
     logger.info("After URL deduplication: %d items", len(items))
+
+    items, skipped_noise = exclude_noise(items)
+    if skipped_noise:
+        logger.info("Skipped %d noise titles", skipped_noise)
 
     filtered_items, skipped_source_cap = _apply_source_cap(items)
     if skipped_source_cap:

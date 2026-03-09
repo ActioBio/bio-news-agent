@@ -3,9 +3,13 @@
     "category": "All",
     "source": "FDA"
   },
-  "https://www.statnews.com/feed/": {
+  "https://www.statnews.com/category/biotech/feed/": {
     "category": "All",
-    "source": "STAT News"
+    "source": "STAT Biotech"
+  },
+  "https://www.statnews.com/category/pharma/feed/": {
+    "category": "All",
+    "source": "STAT Pharma"
   },
   "https://endpts.com/feed/": {
     "category": "All",
@@ -27,8 +31,20 @@
     "category": "All",
     "source": "BioPharma Dive"
   },
-  "https://www.genengnews.com/feed/": {
+  "https://www.ema.europa.eu/en/news.xml": {
     "category": "All",
-    "source": "GEN News"
+    "source": "EMA"
+  },
+  "https://www.biospace.com/drug-development.rss": {
+    "category": "All",
+    "source": "BioSpace Drug Development"
+  },
+  "https://www.biospace.com/FDA.rss": {
+    "category": "All",
+    "source": "BioSpace FDA"
+  },
+  "https://www.biospace.com/business.rss": {
+    "category": "All",
+    "source": "BioSpace Business"
   }
 }

@@ -141,6 +141,14 @@ def _clean_summary(value: Any) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _clean_title(value: Any) -> str:
+    if not value:
+        return ""
+    text = html.unescape(str(value))
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _log_retry(retry_state) -> None:
     exc = retry_state.outcome.exception() if retry_state.outcome else None
     logger.warning("Fetch attempt %s failed, retrying: %s", retry_state.attempt_number, exc)
@@ -222,7 +230,8 @@ def collect_items() -> list[dict[str, Any]]:
             if not published or published < cutoff:
                 continue
 
-            title, link = entry.get("title", "").strip(), entry.get("link", "").strip()
+            title = _clean_title(entry.get("title", ""))
+            link = str(entry.get("link", "")).strip()
             if not (title and link):
                 continue
 

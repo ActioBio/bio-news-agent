@@ -10,6 +10,7 @@ from graph import (
     _keyword_categorize,
     build_graph,
     node_categorize,
+    node_filter,
     node_render,
 )
 
@@ -96,6 +97,20 @@ def test_build_candidate_groups_clusters_possible_duplicates():
 
     assert [len(group) for group in groups] == [2, 1]
     assert {item["id"] for item in groups[0]} == {"a", "b"}
+
+
+def test_node_filter_removes_noise_titles_before_source_cap(monkeypatch):
+    items = [
+        _item("a", "Pfizer posts phase 3 readout", 12, source="Endpoints News"),
+        _item("b", "Webinar: better clinical trial enrollment", 11, source="FierceBiotech"),
+        _item("c", "Opinion: the future of hospital billing", 10, source="STAT Biotech"),
+        _item("d", "Roche drug fails key breast cancer study", 9, source="Endpoints News"),
+    ]
+
+    monkeypatch.setattr(graph, "MAX_ITEMS_PER_SOURCE", 1)
+    result = node_filter({"items": items})
+
+    assert [item["id"] for item in result["items"]] == ["a"]
 
 
 def test_node_categorize_uses_structured_llm_response(monkeypatch):

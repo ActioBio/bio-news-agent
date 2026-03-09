@@ -62,7 +62,7 @@ def test_collect_items_keeps_entries_when_bozo(monkeypatch):
         entries = [
             {
                 "published_parsed": (2026, 2, 6, 12, 0, 0, 0, 0, 0),
-                "title": "Valid story",
+                "title": "<a href='https://example.com/story'>Valid story</a>",
                 "link": "https://example.com/story?utm_source=newsletter",
                 "summary": "<p>Valid <b>summary</b></p>",
             }
@@ -91,6 +91,7 @@ def test_collect_items_keeps_entries_when_bozo(monkeypatch):
     assert items[0]["id"] == "https://example.com/story"
     assert items[0]["source"] == "Example Feed"
     assert items[0]["original_title"] == "Valid story"
+    assert items[0]["title"] == "Valid story"
     assert items[0]["summary"] == "Valid summary"
     assert items[0]["source_type"] == "paper"
 

@@ -106,6 +106,7 @@ Pipeline notes:
 
 - Exact duplicates are removed by normalized URL before any LLM call.
 - The collector preserves `original_title` and RSS `summary` for duplicate resolution.
+- Obvious noise titles such as webinars, sponsored posts, and opinion items are dropped before grouping.
 - The source cap is still applied before LLM dedupe for diversity and lower cost.
 - The LLM receives candidate groups and returns structured duplicate clusters instead of line-based `SKIP` output.
 - Short display titles are generated only for kept items after duplicates are resolved.
