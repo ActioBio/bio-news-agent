@@ -253,7 +253,7 @@ def _build_candidate_groups(items: list[dict[str, Any]]) -> list[list[dict[str, 
         return []
 
     match_data = [_build_item_match_data(item) for item in items]
-    adjacency = {index: set() for index in range(len(items))}
+    adjacency: dict[int, set[int]] = {index: set() for index in range(len(items))}
     for left_index in range(len(items)):
         for right_index in range(left_index + 1, len(items)):
             if _is_candidate_duplicate_data(match_data[left_index], match_data[right_index]):
