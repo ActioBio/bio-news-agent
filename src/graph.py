@@ -24,7 +24,7 @@ from openai import (
     OpenAI,
     RateLimitError,
 )
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 try:
     from collector import collect_items
@@ -174,15 +174,23 @@ def _get_openai_api_key() -> str:
 
 @lru_cache(maxsize=1)
 def _get_openai_client(api_key: str) -> OpenAI:
-    return OpenAI(api_key=api_key, timeout=OPENAI_TIMEOUT_SECONDS)
+    return OpenAI(
+        api_key=api_key,
+        timeout=OPENAI_TIMEOUT_SECONDS,
+        max_retries=0,
+    )
+
+
+def _should_retry_openai_error(exc: BaseException) -> bool:
+    if isinstance(exc, APITimeoutError):
+        return False
+    return isinstance(exc, (APIConnectionError, RateLimitError, InternalServerError))
 
 
 @retry(
     stop=stop_after_attempt(OPENAI_RETRIES + 1),
     wait=wait_exponential(multiplier=1, min=1, max=20),
-    retry=retry_if_exception_type(
-        (APITimeoutError, APIConnectionError, RateLimitError, InternalServerError)
-    ),
+    retry=retry_if_exception(_should_retry_openai_error),
     before_sleep=_log_openai_retry,
     reraise=True,
 )

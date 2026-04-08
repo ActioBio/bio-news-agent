@@ -3,16 +3,20 @@
 import json
 from datetime import datetime, timezone
 
+import httpx
 import graph
 from graph import (
     _build_candidate_groups,
     _is_high_confidence_duplicate,
     _keyword_categorize,
+    _should_retry_openai_error,
     build_graph,
     node_categorize,
     node_filter,
     node_render,
 )
+from openai import APIConnectionError
+from openai import APITimeoutError
 
 
 def _item(
@@ -237,6 +241,35 @@ def test_node_categorize_uses_dotenv_api_key_when_env_is_placeholder(monkeypatch
     assert captured["api_key"] == "test-key"
     assert len(result["items"]) == 1
     assert result["items"][0]["category"] == "Clinical & Research"
+
+
+def test_node_categorize_timeout_uses_local_resolution(monkeypatch):
+    items = [
+        _item("a", "Pfizer announces phase 3 oncology trial results", 12, source="Pfizer"),
+        _item("b", "Pfizer announces phase 3 oncology trial data", 11, source="Endpoints News"),
+    ]
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(graph, "_get_openai_client", lambda _api_key: object())
+
+    def raise_timeout(_client, _prompt):
+        raise APITimeoutError(
+            request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        )
+
+    monkeypatch.setattr(graph, "_chat_completion_text", raise_timeout)
+
+    result = node_categorize({"items": items})
+
+    assert len(result["items"]) == 1
+    assert result["items"][0]["title"] == "Pfizer announces phase 3 oncology trial results"
+
+
+def test_should_retry_openai_error_skips_timeout():
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+
+    assert not _should_retry_openai_error(APITimeoutError(request=request))
+    assert _should_retry_openai_error(APIConnectionError(request=request))
 
 
 def test_build_graph_renders_empty_digest_when_collection_is_empty(tmp_path, monkeypatch):
