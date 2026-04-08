@@ -178,11 +178,65 @@ def test_node_categorize_without_api_key_uses_local_resolution(monkeypatch):
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(graph, "CONFIG_OPENAI_API_KEY", "")
+    monkeypatch.setattr(graph, "_get_dotenv_openai_api_key", lambda: "")
 
     result = node_categorize({"items": items})
 
     assert len(result["items"]) == 1
     assert result["items"][0]["title"] == "Pfizer announces phase 3 oncology trial results"
+
+
+def test_node_categorize_uses_dotenv_api_key_when_env_is_placeholder(monkeypatch):
+    items = [
+        _item(
+            "a",
+            "Pfizer announces phase 3 oncology trial results",
+            12,
+            source="Pfizer",
+            summary="Official release for the phase 3 oncology study",
+        ),
+        _item(
+            "b",
+            "Pfizer reports phase 3 oncology trial data",
+            11,
+            source="Endpoints News",
+            summary="Coverage of the same phase 3 oncology trial",
+        ),
+    ]
+    response = {
+        "groups": [
+            {
+                "group_id": "g1",
+                "off_topic_ids": [],
+                "clusters": [
+                    {
+                        "keep_id": "g1i1",
+                        "duplicate_ids": ["g1i2"],
+                        "category": "Clinical & Research",
+                        "short_title": "Pfizer posts oncology trial results",
+                    }
+                ],
+            }
+        ]
+    }
+    captured: dict[str, str] = {}
+
+    monkeypatch.setenv("OPENAI_API_KEY", "your_api_key_here")
+    monkeypatch.setattr(graph, "CONFIG_OPENAI_API_KEY", "")
+    monkeypatch.setattr(graph, "_get_dotenv_openai_api_key", lambda: "test-key")
+
+    def fake_get_openai_client(api_key: str) -> object:
+        captured["api_key"] = api_key
+        return object()
+
+    monkeypatch.setattr(graph, "_get_openai_client", fake_get_openai_client)
+    monkeypatch.setattr(graph, "_chat_completion_text", lambda _client, _prompt: json.dumps(response))
+
+    result = node_categorize({"items": items})
+
+    assert captured["api_key"] == "test-key"
+    assert len(result["items"]) == 1
+    assert result["items"][0]["category"] == "Clinical & Research"
 
 
 def test_build_graph_renders_empty_digest_when_collection_is_empty(tmp_path, monkeypatch):

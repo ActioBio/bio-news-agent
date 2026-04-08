@@ -15,6 +15,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, TypedDict
 
+from dotenv import dotenv_values
 from langgraph.graph import StateGraph
 from openai import (
     APIConnectionError,
@@ -32,6 +33,7 @@ try:
         COMPANY_NAMES,
         DIGEST_OUTPUT_FILE,
         MAX_ITEMS_PER_SOURCE,
+        _ENV_FILE as CONFIG_ENV_FILE,
         OPENAI_API_KEY as CONFIG_OPENAI_API_KEY,
         OPENAI_MODEL,
         OPENAI_RETRIES,
@@ -47,6 +49,7 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
         COMPANY_NAMES,
         DIGEST_OUTPUT_FILE,
         MAX_ITEMS_PER_SOURCE,
+        _ENV_FILE as CONFIG_ENV_FILE,
         OPENAI_API_KEY as CONFIG_OPENAI_API_KEY,
         OPENAI_MODEL,
         OPENAI_RETRIES,
@@ -57,6 +60,12 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
     from .renderer import to_markdown
 
 logger = logging.getLogger(__name__)
+_OPENAI_API_KEY_PLACEHOLDERS = {
+    "your_api_key_here",
+    "your_openai_api_key_here",
+    "sk-...",
+    "sk-proj-...",
+}
 
 
 def _resolve_output_file(path_value: str) -> Path:
@@ -120,8 +129,47 @@ def _log_openai_retry(retry_state) -> None:
     )
 
 
+def _is_placeholder_openai_api_key(api_key: str) -> bool:
+    normalized = api_key.strip().strip("\"'").lower()
+    if not normalized:
+        return False
+    if normalized in _OPENAI_API_KEY_PLACEHOLDERS:
+        return True
+    if "your_api" in normalized or "your_openai" in normalized:
+        return True
+    if "changeme" in normalized:
+        return True
+    if "replace" in normalized and "key" in normalized:
+        return True
+    return normalized.endswith("...") and normalized.startswith(("sk-", "sk-proj-"))
+
+
+def _normalize_openai_api_key(api_key: str | None) -> str:
+    if api_key is None:
+        return ""
+    api_key = api_key.strip()
+    if not api_key or _is_placeholder_openai_api_key(api_key):
+        return ""
+    return api_key
+
+
+@lru_cache(maxsize=1)
+def _get_dotenv_openai_api_key() -> str:
+    dotenv_values_map = dotenv_values(CONFIG_ENV_FILE)
+    api_key = dotenv_values_map.get("OPENAI_API_KEY")
+    if not isinstance(api_key, str):
+        return ""
+    return _normalize_openai_api_key(api_key)
+
+
 def _get_openai_api_key() -> str:
-    return (os.getenv("OPENAI_API_KEY") or CONFIG_OPENAI_API_KEY).strip()
+    env_api_key = _normalize_openai_api_key(os.getenv("OPENAI_API_KEY"))
+    if env_api_key:
+        return env_api_key
+    configured_api_key = _normalize_openai_api_key(CONFIG_OPENAI_API_KEY)
+    if configured_api_key:
+        return configured_api_key
+    return _get_dotenv_openai_api_key()
 
 
 @lru_cache(maxsize=1)
@@ -496,7 +544,9 @@ def node_categorize(state: DigestState) -> DigestState:
 
     api_key = _get_openai_api_key()
     if not api_key:
-        logger.warning("No OPENAI_API_KEY found, using local duplicate resolution")
+        logger.warning(
+            "No valid OPENAI_API_KEY found, using local duplicate resolution"
+        )
         resolved_items, skipped_items = _fallback_resolve_groups(groups)
         return _finalize_items(
             state,

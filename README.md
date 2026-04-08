@@ -76,6 +76,7 @@ pip install uv
 ```bash
 cp .env.example .env
 # Edit .env and add your OPENAI_API_KEY
+# Placeholder values such as sk-... or your_api_key_here are treated as missing
 ```
 
 ### 3. Run
@@ -108,5 +109,6 @@ Pipeline notes:
 - The collector preserves `original_title` and RSS `summary` for duplicate resolution.
 - Obvious noise titles such as webinars, sponsored posts, and opinion items are dropped before grouping.
 - The source cap is still applied before LLM dedupe for diversity and lower cost.
+- Placeholder OpenAI API keys from either the shell environment or `.env` are ignored for local runs.
 - The LLM receives candidate groups and returns structured duplicate clusters instead of line-based `SKIP` output.
 - Short display titles are generated only for kept items after duplicates are resolved.
