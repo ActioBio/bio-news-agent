@@ -6,7 +6,7 @@ permissions:
 
 on:
   schedule:
-    - cron: "0 13 * * *"        # 08:00 EST / 09:00 EDT (America/New_York)
+    - cron: "0 17 * * *"        # 12:00 EST / 13:00 EDT (America/New_York)
   workflow_dispatch:
 
 jobs:
@@ -20,17 +20,47 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Skip if today's digest already exists
+        if: github.event_name == 'schedule'
+        id: preflight
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const today = new Date().toISOString().slice(0,10);
+            const title = `Biotech / Pharma Headlines – ${today}`;
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'ai-digest'
+            });
+
+            const existing = issues.find(issue => issue.title === title);
+            const shouldSkip = existing ? 'true' : 'false';
+
+            core.setOutput('should_skip', shouldSkip);
+
+            if (existing) {
+              core.notice(`Skipping digest build because issue #${existing.number} already exists for ${today}.`);
+            } else {
+              core.notice(`No existing digest issue found for ${today}; continuing.`);
+            }
       
       - name: Install uv
+        if: steps.preflight.outputs.should_skip != 'true'
         uses: astral-sh/setup-uv@v3
         
       - name: Set up Python 3.12
+        if: steps.preflight.outputs.should_skip != 'true'
         run: uv python install 3.12
         
       - name: Install dependencies
+        if: steps.preflight.outputs.should_skip != 'true'
         run: uv sync --locked
 
       - name: Validate required secrets
+        if: steps.preflight.outputs.should_skip != 'true'
         run: |
           if [ -z "${OPENAI_API_KEY}" ]; then
             echo "Missing OPENAI_API_KEY secret." >&2
@@ -38,9 +68,11 @@ jobs:
           fi
         
       - name: Build digest with LangGraph
+        if: steps.preflight.outputs.should_skip != 'true'
         run: uv run python src/main.py
 
       - name: Create or update issue
+        if: steps.preflight.outputs.should_skip != 'true'
         uses: actions/github-script@v7
         with:
           script: |

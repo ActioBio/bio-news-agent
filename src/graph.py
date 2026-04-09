@@ -11,6 +11,7 @@ import logging
 import os
 import re
 from collections import defaultdict
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, TypedDict
@@ -76,6 +77,7 @@ def _resolve_output_file(path_value: str) -> Path:
 
 
 _NEWS_FILE = _resolve_output_file(DIGEST_OUTPUT_FILE)
+_CANDIDATE_SNAPSHOT_VERSION = 1
 _MAX_PROMPT_SUMMARY_CHARS = 280
 _SHORT_TITLE_MAX_WORDS = 8
 _DUPLICATE_STOP_WORDS = {
@@ -352,6 +354,98 @@ def _clean_prompt_text(text: str, limit: int) -> str:
     return normalized[: limit - 3].rstrip() + "..."
 
 
+def _serialize_candidate_item(item_id: str, item: dict[str, Any]) -> dict[str, Any]:
+    original_title = _title_for_matching(item)
+    return {
+        "item_id": item_id,
+        "id": str(item.get("id", item_id)),
+        "title": original_title,
+        "original_title": original_title,
+        "link": str(item.get("link", "")),
+        "source": str(item.get("source", "")),
+        "published": item["published"].isoformat(),
+        "summary": _clean_prompt_text(
+            str(item.get("summary", "")),
+            _MAX_PROMPT_SUMMARY_CHARS,
+        ),
+        "category": str(item.get("category", "")),
+        "source_type": str(item.get("source_type", "")),
+    }
+
+
+def _build_candidate_snapshot_groups(
+    groups: list[list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    snapshot_groups: list[dict[str, Any]] = []
+
+    for group_index, group in enumerate(groups, start=1):
+        group_id = f"g{group_index}"
+        snapshot_groups.append(
+            {
+                "group_id": group_id,
+                "items": [
+                    _serialize_candidate_item(f"{group_id}i{item_index}", item)
+                    for item_index, item in enumerate(group, start=1)
+                ],
+            }
+        )
+
+    return snapshot_groups
+
+
+def build_candidate_snapshot(items: list[dict[str, Any]]) -> dict[str, Any]:
+    groups = _build_candidate_groups(items)
+    return {
+        "schema_version": _CANDIDATE_SNAPSHOT_VERSION,
+        "kind": "bio-news-agent.candidates",
+        "categories": list(CATEGORIES),
+        "groups": _build_candidate_snapshot_groups(groups),
+    }
+
+
+def _deserialize_candidate_item(item_payload: dict[str, Any]) -> dict[str, Any]:
+    published_value = item_payload.get("published")
+    if not isinstance(published_value, str):
+        raise ValueError("Candidate item is missing published timestamp")
+
+    title = str(item_payload.get("title", "")).strip()
+    original_title = str(item_payload.get("original_title", title)).strip() or title
+
+    return {
+        "id": str(item_payload.get("id", item_payload.get("item_id", ""))),
+        "title": original_title,
+        "original_title": original_title,
+        "link": str(item_payload.get("link", "")),
+        "source": str(item_payload.get("source", "")),
+        "published": datetime.fromisoformat(published_value),
+        "summary": str(item_payload.get("summary", "")),
+        "category": str(item_payload.get("category", "")),
+        "source_type": str(item_payload.get("source_type", "")),
+    }
+
+
+def _candidate_groups_from_snapshot(snapshot_payload: dict[str, Any]) -> list[list[dict[str, Any]]]:
+    raw_groups = snapshot_payload.get("groups", [])
+    if not isinstance(raw_groups, list):
+        raise ValueError("Candidate snapshot missing groups list")
+
+    groups: list[list[dict[str, Any]]] = []
+    for group_payload in raw_groups:
+        if not isinstance(group_payload, dict):
+            raise ValueError("Candidate group must be an object")
+        raw_items = group_payload.get("items", [])
+        if not isinstance(raw_items, list):
+            raise ValueError("Candidate group missing items list")
+        groups.append(
+            [
+                _deserialize_candidate_item(item_payload)
+                for item_payload in raw_items
+                if isinstance(item_payload, dict)
+            ]
+        )
+    return groups
+
+
 def _extract_json_object(text: str) -> dict[str, Any]:
     payload = text.strip()
     if payload.startswith("```"):
@@ -508,11 +602,133 @@ def _finalize_items(
     return state
 
 
+def _apply_structured_response(
+    state: DigestState,
+    groups: list[list[dict[str, Any]]],
+    response_payload: dict[str, Any],
+    *,
+    log_label: str,
+) -> DigestState:
+    response_groups = response_payload.get("groups", [])
+    if not isinstance(response_groups, list):
+        raise ValueError("LLM response missing groups list")
+
+    response_group_lookup: dict[str, dict[str, Any]] = {}
+    for response_group in response_groups:
+        if not isinstance(response_group, dict):
+            continue
+        group_id = str(response_group.get("group_id", "")).strip()
+        clusters = response_group.get("clusters", [])
+        if not group_id or not isinstance(clusters, list):
+            continue
+        off_topic_ids = response_group.get("off_topic_ids", [])
+        if not isinstance(off_topic_ids, list):
+            off_topic_ids = []
+        response_group_lookup[group_id] = {
+            "clusters": [cluster for cluster in clusters if isinstance(cluster, dict)],
+            "off_topic_ids": [str(item_id).strip() for item_id in off_topic_ids],
+        }
+
+    kept_items: list[dict[str, Any]] = []
+    skipped_items = 0
+
+    for group_index, group in enumerate(groups, start=1):
+        group_id = f"g{group_index}"
+        group_prompt_ids = {
+            f"{group_id}i{item_index}": item
+            for item_index, item in enumerate(group, start=1)
+        }
+        group_response = response_group_lookup.get(group_id, {})
+        group_clusters = group_response.get("clusters", [])
+        off_topic_ids = {
+            item_id
+            for item_id in group_response.get("off_topic_ids", [])
+            if item_id in group_prompt_ids
+        }
+        used_ids: set[str] = set(off_topic_ids)
+        skipped_items += len(off_topic_ids)
+
+        for cluster in group_clusters:
+            keep_id = str(cluster.get("keep_id", "")).strip()
+            if keep_id not in group_prompt_ids or keep_id in used_ids:
+                continue
+
+            duplicate_ids: list[str] = []
+            for raw_duplicate_id in cluster.get("duplicate_ids", []):
+                duplicate_id = str(raw_duplicate_id).strip()
+                if (
+                    duplicate_id
+                    and duplicate_id != keep_id
+                    and duplicate_id in group_prompt_ids
+                    and duplicate_id not in used_ids
+                ):
+                    duplicate_ids.append(duplicate_id)
+
+            keep_item = group_prompt_ids[keep_id]
+            keep_item["category"] = _validate_category(cluster.get("category"), keep_item)
+            keep_item["title"] = _clean_short_title(
+                cluster.get("short_title"),
+                _title_for_matching(keep_item),
+            )
+
+            kept_items.append(keep_item)
+            used_ids.add(keep_id)
+            used_ids.update(duplicate_ids)
+            skipped_items += len(duplicate_ids)
+
+        for prompt_id, item in group_prompt_ids.items():
+            if prompt_id in used_ids:
+                continue
+            item["title"] = _title_for_matching(item)
+            item["category"] = _keyword_categorize(_title_for_matching(item))
+            kept_items.append(item)
+
+    return _finalize_items(
+        state,
+        kept_items,
+        skipped_items,
+        log_label=log_label,
+    )
+
+
 def node_collect(state: DigestState) -> DigestState:
     items = collect_items()
     logger.info("Collected %d items", len(items))
     state["items"] = items
     return state
+
+
+def export_candidate_snapshot(output_path: Path) -> dict[str, Any]:
+    state = node_collect({})
+    state = node_filter(state)
+    snapshot_payload = build_candidate_snapshot(state.get("items", []))
+    output_path.write_text(
+        json.dumps(snapshot_payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return snapshot_payload
+
+
+def apply_decisions_file(
+    decisions_path: Path,
+    candidates_path: Path,
+) -> DigestState:
+    snapshot_payload = json.loads(candidates_path.read_text(encoding="utf-8"))
+    if not isinstance(snapshot_payload, dict):
+        raise ValueError("Candidate snapshot must be a JSON object")
+
+    groups = _candidate_groups_from_snapshot(snapshot_payload)
+    decisions_payload = _extract_json_object(
+        decisions_path.read_text(encoding="utf-8")
+    )
+
+    state = _apply_structured_response(
+        {},
+        groups,
+        decisions_payload,
+        log_label="After categorization",
+    )
+    return node_render(state)
 
 
 def node_filter(state: DigestState) -> DigestState:
@@ -566,26 +782,10 @@ def node_categorize(state: DigestState) -> DigestState:
     try:
         client = _get_openai_client(api_key)
 
-        prompt_groups: list[dict[str, Any]] = []
-        for group_index, group in enumerate(groups, start=1):
-            group_id = f"g{group_index}"
-            prompt_items: list[dict[str, Any]] = []
-            for item_index, item in enumerate(group, start=1):
-                prompt_items.append(
-                    {
-                        "item_id": f"{group_id}i{item_index}",
-                        "source": item["source"],
-                        "published": item["published"].isoformat(),
-                        "title": _title_for_matching(item),
-                        "summary": _clean_prompt_text(
-                            str(item.get("summary", "")),
-                            _MAX_PROMPT_SUMMARY_CHARS,
-                        ),
-                    }
-                )
-            prompt_groups.append({"group_id": group_id, "items": prompt_items})
-
-        prompt_payload = json.dumps({"groups": prompt_groups}, ensure_ascii=True)
+        prompt_payload = json.dumps(
+            {"groups": _build_candidate_snapshot_groups(groups)},
+            ensure_ascii=True,
+        )
         categories_str = "\n".join(f"- {category}" for category in CATEGORIES)
 
         prompt = f"""Deduplicate and categorize these biotech and pharma news items.
@@ -626,84 +826,10 @@ Input JSON:
 
         response_text = _chat_completion_text(client, prompt)
         response_payload = _extract_json_object(response_text)
-        response_groups = response_payload.get("groups", [])
-        if not isinstance(response_groups, list):
-            raise ValueError("LLM response missing groups list")
-
-        response_group_lookup: dict[str, dict[str, Any]] = {}
-        for response_group in response_groups:
-            if not isinstance(response_group, dict):
-                continue
-            group_id = str(response_group.get("group_id", "")).strip()
-            clusters = response_group.get("clusters", [])
-            if not group_id or not isinstance(clusters, list):
-                continue
-            off_topic_ids = response_group.get("off_topic_ids", [])
-            if not isinstance(off_topic_ids, list):
-                off_topic_ids = []
-            response_group_lookup[group_id] = {
-                "clusters": [cluster for cluster in clusters if isinstance(cluster, dict)],
-                "off_topic_ids": [str(item_id).strip() for item_id in off_topic_ids],
-            }
-
-        kept_items: list[dict[str, Any]] = []
-        skipped_items = 0
-
-        for group_index, group in enumerate(groups, start=1):
-            group_id = f"g{group_index}"
-            group_prompt_ids = {
-                f"{group_id}i{item_index}": item
-                for item_index, item in enumerate(group, start=1)
-            }
-            group_response = response_group_lookup.get(group_id, {})
-            group_clusters = group_response.get("clusters", [])
-            off_topic_ids = {
-                item_id
-                for item_id in group_response.get("off_topic_ids", [])
-                if item_id in group_prompt_ids
-            }
-            used_ids: set[str] = set(off_topic_ids)
-            skipped_items += len(off_topic_ids)
-
-            for cluster in group_clusters:
-                keep_id = str(cluster.get("keep_id", "")).strip()
-                if keep_id not in group_prompt_ids or keep_id in used_ids:
-                    continue
-
-                duplicate_ids: list[str] = []
-                for raw_duplicate_id in cluster.get("duplicate_ids", []):
-                    duplicate_id = str(raw_duplicate_id).strip()
-                    if (
-                        duplicate_id
-                        and duplicate_id != keep_id
-                        and duplicate_id in group_prompt_ids
-                        and duplicate_id not in used_ids
-                    ):
-                        duplicate_ids.append(duplicate_id)
-
-                keep_item = group_prompt_ids[keep_id]
-                keep_item["category"] = _validate_category(cluster.get("category"), keep_item)
-                keep_item["title"] = _clean_short_title(
-                    cluster.get("short_title"),
-                    _title_for_matching(keep_item),
-                )
-
-                kept_items.append(keep_item)
-                used_ids.add(keep_id)
-                used_ids.update(duplicate_ids)
-                skipped_items += len(duplicate_ids)
-
-            for prompt_id, item in group_prompt_ids.items():
-                if prompt_id in used_ids:
-                    continue
-                item["title"] = _title_for_matching(item)
-                item["category"] = _keyword_categorize(_title_for_matching(item))
-                kept_items.append(item)
-
-        return _finalize_items(
+        return _apply_structured_response(
             state,
-            kept_items,
-            skipped_items,
+            groups,
+            response_payload,
             log_label="After categorization",
         )
     except Exception as exc:

@@ -10,7 +10,9 @@ from graph import (
     _is_high_confidence_duplicate,
     _keyword_categorize,
     _should_retry_openai_error,
+    apply_decisions_file,
     build_graph,
+    build_candidate_snapshot,
     node_categorize,
     node_filter,
     node_render,
@@ -101,6 +103,32 @@ def test_build_candidate_groups_clusters_possible_duplicates():
 
     assert [len(group) for group in groups] == [2, 1]
     assert {item["id"] for item in groups[0]} == {"a", "b"}
+
+
+def test_build_candidate_snapshot_preserves_group_ids():
+    items = [
+        _item(
+            "a",
+            "Pfizer announces phase 3 oncology trial results",
+            12,
+            source="Pfizer",
+            summary="Official release for the phase 3 oncology study",
+        ),
+        _item(
+            "b",
+            "Pfizer reports phase 3 oncology trial data",
+            11,
+            source="Endpoints News",
+            summary="Coverage of the same phase 3 oncology trial",
+        ),
+    ]
+
+    snapshot = build_candidate_snapshot(items)
+
+    assert snapshot["kind"] == "bio-news-agent.candidates"
+    assert snapshot["groups"][0]["group_id"] == "g1"
+    assert [item["item_id"] for item in snapshot["groups"][0]["items"]] == ["g1i1", "g1i2"]
+    assert snapshot["groups"][0]["items"][0]["link"] == "https://example.com/a"
 
 
 def test_node_filter_removes_noise_titles_before_source_cap(monkeypatch):
@@ -263,6 +291,72 @@ def test_node_categorize_timeout_uses_local_resolution(monkeypatch):
 
     assert len(result["items"]) == 1
     assert result["items"][0]["title"] == "Pfizer announces phase 3 oncology trial results"
+
+
+def test_apply_decisions_file_renders_from_candidate_snapshot(tmp_path, monkeypatch):
+    items = [
+        _item(
+            "a",
+            "Pfizer announces phase 3 oncology trial results",
+            12,
+            source="Pfizer",
+            summary="Official release for the phase 3 oncology study",
+        ),
+        _item(
+            "b",
+            "Pfizer reports phase 3 oncology trial data",
+            11,
+            source="Endpoints News",
+            summary="Coverage of the same phase 3 oncology trial",
+        ),
+        _item(
+            "c",
+            "Hospital cafeterias debate protein shake trends",
+            10,
+            source="Lifestyle Weekly",
+        ),
+    ]
+    candidates_file = tmp_path / "digest-candidates.json"
+    decisions_file = tmp_path / "digest-decisions.json"
+    output_file = tmp_path / "news.md"
+
+    candidates_file.write_text(
+        json.dumps(build_candidate_snapshot(items)),
+        encoding="utf-8",
+    )
+    decisions_file.write_text(
+        json.dumps(
+            {
+                "groups": [
+                    {
+                        "group_id": "g1",
+                        "off_topic_ids": [],
+                        "clusters": [
+                            {
+                                "keep_id": "g1i1",
+                                "duplicate_ids": ["g1i2"],
+                                "category": "Clinical & Research",
+                                "short_title": "Pfizer posts oncology trial results",
+                            }
+                        ],
+                    },
+                    {
+                        "group_id": "g2",
+                        "off_topic_ids": ["g2i1"],
+                        "clusters": [],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(graph, "_NEWS_FILE", output_file)
+
+    result = apply_decisions_file(decisions_file, candidates_file)
+
+    assert len(result["items"]) == 1
+    assert result["items"][0]["title"] == "Pfizer posts oncology trial results"
+    assert output_file.read_text(encoding="utf-8") == result["markdown"]
 
 
 def test_should_retry_openai_error_skips_timeout():

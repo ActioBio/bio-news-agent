@@ -4,60 +4,81 @@ A lightweight AI agent that grabs fresh biotech/pharma headlines and posts a dai
 
 🔔 **Watch this repository** to receive the daily biotech news digest email delivered straight to your inbox.
 
+Scheduled runs check for today's digest issue before calling the LLM, so fallback CI skips duplicate builds.
+
 ## Architecture
 
 ```mermaid
 flowchart LR
     subgraph Trigger[Triggers]
         GH[GitHub Actions<br/>schedule or manual dispatch]
+        AGENT[Codex / Claude Code<br/>automation]
         LOCAL[Local CLI run<br/>uv run python src/main.py]
     end
 
+    subgraph Guard[Issue Guard]
+        CHECK[Check today's GitHub issue]
+    end
+
     subgraph App[Application]
-        G[LangGraph]
-        C[node_collect]
-        F[node_filter]
-        K[node_categorize]
-        R[node_render]
-        G --> C --> F --> K --> R
+        C[Collect]
+        F[Filter]
+        G[Group candidates]
+        K[Categorize]
+        R[Render]
+        C --> F --> G --> K --> R
     end
 
     subgraph In[Inputs]
         FEEDS[feeds.json]
         RSS[RSS feed endpoints]
         CONF[.env + config.py]
-        OAI[OpenAI API]
+        OAI[OpenAI API<br/>GitHub fallback]
+        MODEL[Codex / Claude model<br/>agent mode]
     end
 
     subgraph Out[Outputs]
+        JSON[digest-candidates.json<br/>digest-decisions.json]
         MD[news.md]
         ISSUE[GitHub Issue<br/>daily biotech digest]
     end
 
-    GH --> G
-    LOCAL --> G
+    GH --> CHECK --> C
+    AGENT --> CHECK
+    LOCAL --> C
     FEEDS --> C
     RSS --> C
     CONF --> C
     CONF --> K
     OAI --> K
-    R --> MD --> ISSUE
+    MODEL --> K
+    G --> JSON
+    JSON --> K
+    R --> MD
+    MD --> ISSUE
 
     classDef io fill:#eef7ff,stroke:#1f6feb,stroke-width:1px,color:#0b1f3a;
     classDef proc fill:#f7f7f7,stroke:#555,stroke-width:1px,color:#111;
-    class FEEDS,RSS,CONF,OAI,MD,ISSUE io;
-    class GH,LOCAL,G,C,F,K,R proc;
+    class FEEDS,RSS,CONF,OAI,MODEL,JSON,MD,ISSUE io;
+    class GH,AGENT,LOCAL,CHECK,C,F,G,K,R proc;
 ```
 
 ```mermaid
 flowchart LR
-    C[Collect] --> F[Filter]
-    F --> G[Build candidate groups]
-    G --> K1{API key for LLM clustering?}
-    K1 -- Yes --> L[Structured LLM dedupe + categorize]
+    GH[GitHub Actions] --> T{Today's issue<br/>already open?}
+    AGENT[Codex / Claude] --> T
+    T -- Yes --> S[Stop]
+    T -- No --> C[Collect + filter + build candidate groups]
+    C --> P{Path}
+    P -- GitHub Actions --> K1{OPENAI_API_KEY available?}
+    K1 -- Yes --> L[OpenAI dedupe + categorize]
     K1 -- No --> R[Local duplicate resolution + fallback categorization]
-    L --> W[Render + Write news.md]
+    P -- Codex / Claude --> X[Write digest-candidates.json]
+    X --> Y[Agent writes digest-decisions.json]
+    Y --> Z[Apply decisions]
+    L --> W[Render + write news.md]
     R --> W
+    Z --> W
 ```
 
 ## Prerequisites
@@ -84,6 +105,46 @@ cp .env.example .env
 cd bio-news-agent
 uv run python src/main.py
 ```
+
+## Agent-driven mode
+
+This path keeps feed collection and filtering in Python, but lets Codex or Claude Code handle dedupe/categorization without `OPENAI_API_KEY`.
+
+```bash
+uv run python src/main.py --candidates-only
+# agent reads digest-candidates.json and writes digest-decisions.json
+uv run python src/main.py --apply-decisions digest-decisions.json
+```
+
+`--candidates-only` writes `digest-candidates.json` by default. Use `--candidates-file <path>` to override the snapshot path for either step.
+
+Runner setup:
+
+- Codex: check today's issue first, run `uv sync --locked`, run `uv run python src/main.py --candidates-only`, write `digest-decisions.json`, then run `uv run python src/main.py --apply-decisions digest-decisions.json`.
+- Claude Code: use the same two-step flow and the same `digest-decisions.json` schema.
+
+Agent decisions should use this JSON shape:
+
+```json
+{
+  "groups": [
+    {
+      "group_id": "g1",
+      "off_topic_ids": ["g1i3"],
+      "clusters": [
+        {
+          "keep_id": "g1i1",
+          "duplicate_ids": ["g1i2"],
+          "category": "Clinical & Research",
+          "short_title": "Pfizer posts oncology trial results"
+        }
+      ]
+    }
+  ]
+}
+```
+
+After `--apply-decisions`, the existing issue publishing step can post `news.md` as usual.
 
 ## Feed configuration
 
