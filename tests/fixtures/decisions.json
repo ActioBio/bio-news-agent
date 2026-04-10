@@ -1,0 +1,29 @@
+{
+  "executive_summary": "Pfizer posted positive phase 3 oncology data as biotech digest filtering removed off-topic content.",
+  "top_stories": ["g1i1"],
+  "groups": [
+    {
+      "group_id": "g1",
+      "off_topic_ids": [],
+      "clusters": [
+        {
+          "keep_id": "g1i1",
+          "duplicate_ids": [
+            "g1i2"
+          ],
+          "category": "Clinical & Research",
+          "short_title": "Pfizer posts oncology trial results",
+          "summary_line": "Phase 3 data could advance a new oncology treatment toward approval.",
+          "tier": "high"
+        }
+      ]
+    },
+    {
+      "group_id": "g2",
+      "off_topic_ids": [
+        "g2i1"
+      ],
+      "clusters": []
+    }
+  ]
+}

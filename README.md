@@ -5,6 +5,7 @@ A lightweight AI agent that grabs fresh biotech/pharma headlines and posts a dai
 🔔 **Watch this repository** to receive the daily biotech news digest email delivered straight to your inbox.
 
 Scheduled runs check for today's digest issue before calling the LLM, so fallback CI skips duplicate builds.
+Push and pull request CI runs `pytest` and `mypy`.
 
 ## Architecture
 
@@ -128,6 +129,8 @@ Agent decisions should use this JSON shape:
 
 ```json
 {
+  "executive_summary": "2-3 sentence overview of today's biotech news.",
+  "top_stories": ["g1i1"],
   "groups": [
     {
       "group_id": "g1",
@@ -137,7 +140,9 @@ Agent decisions should use this JSON shape:
           "keep_id": "g1i1",
           "duplicate_ids": ["g1i2"],
           "category": "Clinical & Research",
-          "short_title": "Pfizer posts oncology trial results"
+          "short_title": "Pfizer posts oncology trial results",
+          "summary_line": "Why this matters in one sentence.",
+          "tier": "high"
         }
       ]
     }

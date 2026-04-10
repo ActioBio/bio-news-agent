@@ -1,0 +1,60 @@
+{
+  "schema_version": 2,
+  "kind": "bio-news-agent.candidates",
+  "categories": [
+    "Regulatory & FDA",
+    "Clinical & Research",
+    "Deals & Finance",
+    "Company News",
+    "Policy & Politics",
+    "Market Insights"
+  ],
+  "groups": [
+    {
+      "group_id": "g1",
+      "items": [
+        {
+          "item_id": "g1i1",
+          "id": "a",
+          "title": "Pfizer announces phase 3 oncology trial results",
+          "original_title": "Pfizer announces phase 3 oncology trial results",
+          "link": "https://example.com/a",
+          "source": "Pfizer",
+          "published": "2026-01-01T12:00:00+00:00",
+          "summary": "Official release for the phase 3 oncology study",
+          "category": "All",
+          "source_type": "news"
+        },
+        {
+          "item_id": "g1i2",
+          "id": "b",
+          "title": "Pfizer reports phase 3 oncology trial data",
+          "original_title": "Pfizer reports phase 3 oncology trial data",
+          "link": "https://example.com/b",
+          "source": "Endpoints News",
+          "published": "2026-01-01T11:00:00+00:00",
+          "summary": "Coverage of the same phase 3 oncology trial",
+          "category": "All",
+          "source_type": "news"
+        }
+      ]
+    },
+    {
+      "group_id": "g2",
+      "items": [
+        {
+          "item_id": "g2i1",
+          "id": "c",
+          "title": "Hospital cafeterias debate protein shake trends",
+          "original_title": "Hospital cafeterias debate protein shake trends",
+          "link": "https://example.com/c",
+          "source": "Lifestyle Weekly",
+          "published": "2026-01-01T10:00:00+00:00",
+          "summary": "",
+          "category": "All",
+          "source_type": "news"
+        }
+      ]
+    }
+  ]
+}

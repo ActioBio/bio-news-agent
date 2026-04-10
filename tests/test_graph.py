@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 import graph
@@ -19,6 +20,13 @@ from graph import (
 )
 from openai import APIConnectionError
 from openai import APITimeoutError
+
+
+_FIXTURES_DIR = Path(__file__).with_name("fixtures")
+
+
+def _load_fixture(name: str) -> dict[str, object]:
+    return json.loads((_FIXTURES_DIR / name).read_text(encoding="utf-8"))
 
 
 def _item(
@@ -131,6 +139,35 @@ def test_build_candidate_snapshot_preserves_group_ids():
     assert snapshot["groups"][0]["items"][0]["link"] == "https://example.com/a"
 
 
+def test_build_candidate_snapshot_matches_contract_fixture():
+    items = [
+        _item(
+            "a",
+            "Pfizer announces phase 3 oncology trial results",
+            12,
+            source="Pfizer",
+            summary="Official release for the phase 3 oncology study",
+        ),
+        _item(
+            "b",
+            "Pfizer reports phase 3 oncology trial data",
+            11,
+            source="Endpoints News",
+            summary="Coverage of the same phase 3 oncology trial",
+        ),
+        _item(
+            "c",
+            "Hospital cafeterias debate protein shake trends",
+            10,
+            source="Lifestyle Weekly",
+        ),
+    ]
+
+    snapshot = build_candidate_snapshot(items)
+
+    assert snapshot == _load_fixture("candidate_snapshot.json")
+
+
 def test_node_filter_removes_noise_titles_before_source_cap(monkeypatch):
     items = [
         _item("a", "Pfizer posts phase 3 readout", 12, source="Endpoints News"),
@@ -169,6 +206,8 @@ def test_node_categorize_uses_structured_llm_response(monkeypatch):
         ),
     ]
     response = {
+        "executive_summary": "Pfizer posted positive oncology data.",
+        "top_stories": ["g1i1"],
         "groups": [
             {
                 "group_id": "g1",
@@ -179,6 +218,8 @@ def test_node_categorize_uses_structured_llm_response(monkeypatch):
                         "duplicate_ids": ["g1i2"],
                         "category": "Clinical & Research",
                         "short_title": "Pfizer posts oncology trial results",
+                        "summary_line": "Phase 3 data could advance a new treatment.",
+                        "tier": "high",
                     }
                 ],
             },
@@ -187,7 +228,7 @@ def test_node_categorize_uses_structured_llm_response(monkeypatch):
                 "off_topic_ids": ["g2i1"],
                 "clusters": [],
             },
-        ]
+        ],
     }
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -200,6 +241,11 @@ def test_node_categorize_uses_structured_llm_response(monkeypatch):
     assert result["items"][0]["title"] == "Pfizer posts oncology trial results"
     assert result["items"][0]["category"] == "Clinical & Research"
     assert result["items"][0]["original_title"] == "Pfizer announces phase 3 oncology trial results"
+    assert result["items"][0]["summary_line"] == "Phase 3 data could advance a new treatment."
+    assert result["items"][0]["tier"] == "high"
+    assert result["items"][0]["coverage_sources"] == ["Endpoints News"]
+    assert result["executive_summary"] == "Pfizer posted positive oncology data."
+    assert result["top_stories"] == ["g1i1"]
 
 
 def test_node_categorize_without_api_key_uses_local_resolution(monkeypatch):
@@ -216,6 +262,33 @@ def test_node_categorize_without_api_key_uses_local_resolution(monkeypatch):
 
     assert len(result["items"]) == 1
     assert result["items"][0]["title"] == "Pfizer announces phase 3 oncology trial results"
+    assert result["items"][0]["summary_line"] == ""
+    assert result["items"][0]["tier"] == "normal"
+    assert result["items"][0]["coverage_sources"] == ["Endpoints News"]
+    assert result.get("executive_summary") == ""
+    assert result.get("top_stories") == ["g1i1"]
+
+
+def test_node_categorize_without_api_key_uses_duplicate_summary_when_primary_is_blank(monkeypatch):
+    items = [
+        _item("a", "Pfizer announces phase 3 oncology trial results", 12, source="Pfizer"),
+        _item(
+            "b",
+            "Pfizer announces phase 3 oncology trial data",
+            11,
+            source="Endpoints News",
+            summary="Independent reporting explains why the phase 3 readout matters. Extra detail follows.",
+        ),
+    ]
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(graph, "CONFIG_OPENAI_API_KEY", "")
+    monkeypatch.setattr(graph, "_get_dotenv_openai_api_key", lambda: "")
+
+    result = node_categorize({"items": items})
+
+    assert result["items"][0]["summary_line"] == "Independent reporting explains why the phase 3 readout matters."
+    assert result["items"][0]["coverage_sources"] == ["Endpoints News"]
 
 
 def test_node_categorize_uses_dotenv_api_key_when_env_is_placeholder(monkeypatch):
@@ -359,11 +432,146 @@ def test_apply_decisions_file_renders_from_candidate_snapshot(tmp_path, monkeypa
     assert output_file.read_text(encoding="utf-8") == result["markdown"]
 
 
-def test_should_retry_openai_error_skips_timeout():
+def test_apply_decisions_file_matches_contract_fixtures(tmp_path, monkeypatch):
+    candidates_file = tmp_path / "digest-candidates.json"
+    decisions_file = tmp_path / "digest-decisions.json"
+    output_file = tmp_path / "news.md"
+
+    candidates_file.write_text(
+        json.dumps(_load_fixture("candidate_snapshot.json")),
+        encoding="utf-8",
+    )
+    decisions_file.write_text(
+        json.dumps(_load_fixture("decisions.json")),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(graph, "_NEWS_FILE", output_file)
+
+    result = apply_decisions_file(decisions_file, candidates_file)
+
+    assert len(result["items"]) == 1
+    assert result["items"][0]["title"] == "Pfizer posts oncology trial results"
+    assert result["items"][0]["category"] == "Clinical & Research"
+    assert result["items"][0]["summary_line"] == "Phase 3 data could advance a new oncology treatment toward approval."
+    assert result["items"][0]["tier"] == "high"
+    assert result["items"][0]["coverage_sources"] == ["Endpoints News"]
+    assert result["executive_summary"] == "Pfizer posted positive phase 3 oncology data as biotech digest filtering removed off-topic content."
+    assert result["top_stories"] == ["g1i1"]
+    assert output_file.read_text(encoding="utf-8") == result["markdown"]
+
+
+def test_apply_decisions_backward_compat_old_format(tmp_path, monkeypatch):
+    """Old-format decisions without new fields should still work with defaults."""
+    candidates_file = tmp_path / "digest-candidates.json"
+    decisions_file = tmp_path / "digest-decisions.json"
+    output_file = tmp_path / "news.md"
+
+    candidates_file.write_text(
+        json.dumps(_load_fixture("candidate_snapshot.json")),
+        encoding="utf-8",
+    )
+    decisions_file.write_text(
+        json.dumps(
+            {
+                "groups": [
+                    {
+                        "group_id": "g1",
+                        "off_topic_ids": [],
+                        "clusters": [
+                            {
+                                "keep_id": "g1i1",
+                                "duplicate_ids": ["g1i2"],
+                                "category": "Clinical & Research",
+                                "short_title": "Pfizer posts oncology trial results",
+                            }
+                        ],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(graph, "_NEWS_FILE", output_file)
+
+    result = apply_decisions_file(decisions_file, candidates_file)
+
+    assert result["items"][0]["summary_line"] == "Official release for the phase 3 oncology study"
+    assert result["items"][0]["tier"] == "normal"
+    assert result["items"][0]["coverage_sources"] == ["Endpoints News"]
+    assert result.get("executive_summary") == ""
+    assert result.get("top_stories") == ["g1i1", "g2i1"]
+
+
+def test_apply_structured_response_uses_duplicate_summary_when_keep_summary_is_blank():
+    state = {"items": [], "executive_summary": "", "top_stories": []}
+    groups = [[
+        _item("a", "Pfizer announces phase 3 oncology trial results", 12, source="Pfizer"),
+        _item(
+            "b",
+            "Pfizer announces phase 3 oncology trial data",
+            11,
+            source="Endpoints News",
+            summary="Independent reporting explains why the phase 3 readout matters. Extra detail follows.",
+        ),
+    ]]
+    response = {
+        "groups": [
+            {
+                "group_id": "g1",
+                "off_topic_ids": [],
+                "clusters": [
+                    {
+                        "keep_id": "g1i1",
+                        "duplicate_ids": ["g1i2"],
+                        "category": "Clinical & Research",
+                        "short_title": "Pfizer posts oncology trial results",
+                    }
+                ],
+            }
+        ]
+    }
+
+    result = graph._apply_structured_response(state, groups, response, log_label="test")
+
+    assert result["items"][0]["summary_line"] == "Independent reporting explains why the phase 3 readout matters."
+    assert result["items"][0]["coverage_sources"] == ["Endpoints News"]
+
+
+def test_should_retry_openai_error_retries_timeout():
     request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
 
-    assert not _should_retry_openai_error(APITimeoutError(request=request))
+    assert _should_retry_openai_error(APITimeoutError(request=request))
     assert _should_retry_openai_error(APIConnectionError(request=request))
+
+
+def test_clean_summary_line_preserves_abbreviations_and_versions():
+    assert (
+        graph._clean_summary_line("U.S. regulators approved the therapy after review.")
+        == "U.S. regulators approved the therapy after review."
+    )
+    assert (
+        graph._clean_summary_line("Version 2.1 ships today with better coding support.")
+        == "Version 2.1 ships today with better coding support."
+    )
+    assert (
+        graph._clean_summary_line("OpenAI Inc. Launches a new coding assistant for teams.")
+        == "OpenAI Inc. Launches a new coding assistant for teams."
+    )
+    assert (
+        graph._clean_summary_line("The board met at Acme Co. Headquarters before the vote.")
+        == "The board met at Acme Co. Headquarters before the vote."
+    )
+
+
+def test_clean_summary_line_keeps_only_first_sentence():
+    assert (
+        graph._clean_summary_line("No major policy change yet. Markets are watching.")
+        == "No major policy change yet."
+    )
+    assert (
+        graph._clean_summary_line("This matters. here is a lowercase second sentence.")
+        == "This matters."
+    )
 
 
 def test_build_graph_renders_empty_digest_when_collection_is_empty(tmp_path, monkeypatch):
