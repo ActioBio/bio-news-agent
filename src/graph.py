@@ -82,9 +82,15 @@ def _resolve_output_file(path_value: str) -> Path:
 
 
 _NEWS_FILE = _resolve_output_file(DIGEST_OUTPUT_FILE)
-_CANDIDATE_SNAPSHOT_VERSION = 2
+_CANDIDATE_SNAPSHOT_VERSION = 3
 _MAX_PROMPT_SUMMARY_CHARS = 280
 _SHORT_TITLE_MAX_WORDS = 8
+_SOURCE_ROLE_PRIORITY = {
+    "primary": 3,
+    "independent_reporting": 2,
+    "commentary": 1,
+    "community": 0,
+}
 _DUPLICATE_STOP_WORDS = {
     "about",
     "after",
@@ -121,6 +127,39 @@ class DigestState(TypedDict, total=False):
     markdown: str
     executive_summary: str
     top_stories: list[str]
+
+
+def _normalize_source_role(value: Any) -> str:
+    source_role = str(value).strip().lower()
+    if source_role in _SOURCE_ROLE_PRIORITY:
+        return source_role
+    return "independent_reporting"
+
+
+def _source_role_priority(value: Any) -> int:
+    return _SOURCE_ROLE_PRIORITY[_normalize_source_role(value)]
+
+
+def _group_item_sort_key(item: dict[str, Any]) -> tuple[float, float, str]:
+    return (
+        -float(_source_role_priority(item.get("source_role"))),
+        -item["published"].timestamp(),
+        str(item.get("source", "")),
+    )
+
+
+def _story_rank_key(item: dict[str, Any]) -> tuple[float, float, float, float, str]:
+    return (
+        -(1 if item.get("tier") == "high" else 0),
+        -float(_source_role_priority(item.get("source_role"))),
+        -float(len(item.get("coverage_sources", []))),
+        -item["published"].timestamp(),
+        str(item.get("source", "")),
+    )
+
+
+def _sort_items_by_source_role(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(items, key=_group_item_sort_key)
 
 
 class ItemMatchData(TypedDict):
@@ -344,12 +383,15 @@ def _build_candidate_groups(items: list[dict[str, Any]]) -> list[list[dict[str, 
         groups.append(
             sorted(
                 (items[item_index] for item_index in component),
-                key=lambda item: item["published"],
-                reverse=True,
+                key=_group_item_sort_key,
             )
         )
 
-    return sorted(groups, key=lambda group: group[0]["published"], reverse=True)
+    return sorted(
+        groups,
+        key=lambda group: max(item["published"].timestamp() for item in group),
+        reverse=True,
+    )
 
 
 def _clean_prompt_text(text: str, limit: int) -> str:
@@ -375,27 +417,61 @@ def _serialize_candidate_item(item_id: str, item: dict[str, Any]) -> dict[str, A
         ),
         "category": str(item.get("category", "")),
         "source_type": str(item.get("source_type", "")),
+        "source_role": _normalize_source_role(item.get("source_role")),
     }
 
 
-def _build_candidate_snapshot_groups(
-    groups: list[list[dict[str, Any]]],
-) -> list[dict[str, Any]]:
-    snapshot_groups: list[dict[str, Any]] = []
+def _serialize_dedupe_candidate_item(item_id: str, item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "item_id": item_id,
+        "title": _title_for_matching(item),
+        "source": str(item.get("source", "")),
+        "source_role": _normalize_source_role(item.get("source_role")),
+        "summary": _clean_prompt_text(
+            str(item.get("summary", "")),
+            _MAX_PROMPT_SUMMARY_CHARS,
+        ),
+    }
 
-    for group_index, group in enumerate(groups, start=1):
+
+def _build_group_payloads(
+    indexed_groups: list[tuple[int, list[dict[str, Any]]]],
+    *,
+    item_serializer,
+) -> list[dict[str, Any]]:
+    payload_groups: list[dict[str, Any]] = []
+
+    for group_index, group in indexed_groups:
         group_id = f"g{group_index}"
-        snapshot_groups.append(
+        payload_groups.append(
             {
                 "group_id": group_id,
                 "items": [
-                    _serialize_candidate_item(f"{group_id}i{item_index}", item)
+                    item_serializer(f"{group_id}i{item_index}", item)
                     for item_index, item in enumerate(group, start=1)
                 ],
             }
         )
 
-    return snapshot_groups
+    return payload_groups
+
+
+def _build_candidate_snapshot_groups(
+    groups: list[list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    return _build_group_payloads(
+        list(enumerate(groups, start=1)),
+        item_serializer=_serialize_candidate_item,
+    )
+
+
+def _build_dedupe_prompt_groups(
+    indexed_groups: list[tuple[int, list[dict[str, Any]]]],
+) -> list[dict[str, Any]]:
+    return _build_group_payloads(
+        indexed_groups,
+        item_serializer=_serialize_dedupe_candidate_item,
+    )
 
 
 def build_candidate_snapshot(items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -426,6 +502,7 @@ def _deserialize_candidate_item(item_payload: dict[str, Any]) -> dict[str, Any]:
         "summary": str(item_payload.get("summary", "")),
         "category": str(item_payload.get("category", "")),
         "source_type": str(item_payload.get("source_type", "")),
+        "source_role": _normalize_source_role(item_payload.get("source_role")),
     }
 
 
@@ -449,6 +526,23 @@ def _candidate_groups_from_snapshot(snapshot_payload: dict[str, Any]) -> list[li
             ]
         )
     return groups
+
+
+def _serialize_enrichment_item(item: dict[str, Any]) -> dict[str, Any]:
+    prompt_id = str(item.get("_prompt_id", "")).strip()
+    return {
+        "item_id": prompt_id,
+        "title": _title_for_matching(item),
+        "source": str(item.get("source", "")),
+        "source_role": _normalize_source_role(item.get("source_role")),
+        "published": item["published"].isoformat(),
+        "summary": _clean_prompt_text(
+            str(item.get("summary", "")),
+            _MAX_PROMPT_SUMMARY_CHARS,
+        ),
+        "source_type": str(item.get("source_type", "")),
+        "coverage_count": len(item.get("coverage_sources", [])) + 1,
+    }
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
@@ -647,12 +741,7 @@ def _select_top_story_ids(items: list[dict[str, Any]], requested_ids: list[str])
 
     ranked_items = sorted(
         prompt_id_lookup.values(),
-        key=lambda item: (
-            -(1 if item.get("tier") == "high" else 0),
-            -len(item.get("coverage_sources", [])),
-            -item["published"].timestamp(),
-            str(item.get("source", "")),
-        ),
+        key=_story_rank_key,
     )
     return [str(item["_prompt_id"]) for item in ranked_items[:3]]
 
@@ -683,6 +772,177 @@ def _finalize_items(
     state["top_stories"] = _select_top_story_ids(final_items, requested_top_stories)
     state["items"] = final_items
     return state
+
+
+def _seed_resolved_item(
+    item: dict[str, Any],
+    prompt_id: str,
+    *,
+    duplicate_items: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    duplicate_items = duplicate_items or []
+    item["title"] = _title_for_matching(item)
+    item["category"] = _keyword_categorize(_title_for_matching(item))
+    item["_prompt_id"] = prompt_id
+    item["summary_line"] = _best_available_summary_line([item, *duplicate_items])
+    item["tier"] = "normal"
+    item["coverage_sources"] = [
+        str(duplicate_item.get("source", "")).strip()
+        for duplicate_item in duplicate_items
+        if str(duplicate_item.get("source", "")).strip()
+    ]
+    return item
+
+
+def _prepare_distinct_items(
+    indexed_groups: list[tuple[int, list[dict[str, Any]]]],
+) -> list[dict[str, Any]]:
+    prepared_items: list[dict[str, Any]] = []
+    for group_index, group in indexed_groups:
+        for item_index, item in enumerate(group, start=1):
+            prepared_items.append(_seed_resolved_item(item, f"g{group_index}i{item_index}"))
+    return prepared_items
+
+
+def _apply_dedupe_response(
+    indexed_groups: list[tuple[int, list[dict[str, Any]]]],
+    response_payload: dict[str, Any],
+) -> tuple[list[dict[str, Any]], int]:
+    response_groups = response_payload.get("groups", [])
+    if not isinstance(response_groups, list):
+        raise ValueError("LLM dedupe response missing groups list")
+
+    response_group_lookup: dict[str, list[dict[str, Any]]] = {}
+    for response_group in response_groups:
+        if not isinstance(response_group, dict):
+            continue
+        group_id = str(response_group.get("group_id", "")).strip()
+        clusters = response_group.get("clusters", [])
+        if not group_id or not isinstance(clusters, list):
+            continue
+        response_group_lookup[group_id] = [
+            cluster for cluster in clusters if isinstance(cluster, dict)
+        ]
+
+    kept_items: list[dict[str, Any]] = []
+    skipped_items = 0
+
+    for group_index, group in indexed_groups:
+        group_id = f"g{group_index}"
+        if group_id not in response_group_lookup:
+            raise ValueError(f"LLM dedupe response missing group {group_id}")
+
+        group_prompt_ids = {
+            f"{group_id}i{item_index}": item
+            for item_index, item in enumerate(group, start=1)
+        }
+        used_ids: set[str] = set()
+
+        for cluster in response_group_lookup[group_id]:
+            keep_id = str(cluster.get("keep_id", "")).strip()
+            if keep_id not in group_prompt_ids or keep_id in used_ids:
+                continue
+
+            duplicate_ids: list[str] = []
+            for raw_duplicate_id in cluster.get("duplicate_ids", []):
+                duplicate_id = str(raw_duplicate_id).strip()
+                if (
+                    duplicate_id
+                    and duplicate_id != keep_id
+                    and duplicate_id in group_prompt_ids
+                    and duplicate_id not in used_ids
+                ):
+                    duplicate_ids.append(duplicate_id)
+
+            duplicate_items = _sort_items_by_source_role(
+                [group_prompt_ids[dup_id] for dup_id in duplicate_ids]
+            )
+            kept_items.append(
+                _seed_resolved_item(
+                    group_prompt_ids[keep_id],
+                    keep_id,
+                    duplicate_items=duplicate_items,
+                )
+            )
+            used_ids.add(keep_id)
+            used_ids.update(duplicate_ids)
+            skipped_items += len(duplicate_ids)
+
+        for prompt_id, item in group_prompt_ids.items():
+            if prompt_id in used_ids:
+                continue
+            kept_items.append(_seed_resolved_item(item, prompt_id))
+
+    return kept_items, skipped_items
+
+
+def _apply_enrichment_response(
+    state: DigestState,
+    items: list[dict[str, Any]],
+    response_payload: dict[str, Any],
+    *,
+    skipped_items: int,
+    log_label: str,
+) -> DigestState:
+    response_items = response_payload.get("items", [])
+    if not isinstance(response_items, list):
+        raise ValueError("LLM enrichment response missing items list")
+
+    executive_summary = str(response_payload.get("executive_summary", "")).strip()
+    raw_top_stories = response_payload.get("top_stories", [])
+    if not isinstance(raw_top_stories, list):
+        raw_top_stories = []
+    top_story_ids = [str(s).strip() for s in raw_top_stories if isinstance(s, str)]
+    raw_off_topic_ids = response_payload.get("off_topic_ids", [])
+    if not isinstance(raw_off_topic_ids, list):
+        raw_off_topic_ids = []
+    off_topic_ids = {str(item_id).strip() for item_id in raw_off_topic_ids if isinstance(item_id, str)}
+
+    item_lookup = {
+        str(item.get("_prompt_id", "")).strip(): item
+        for item in items
+        if str(item.get("_prompt_id", "")).strip()
+    }
+    enriched_items: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+
+    for response_item in response_items:
+        if not isinstance(response_item, dict):
+            continue
+        item_id = str(response_item.get("item_id", "")).strip()
+        if item_id not in item_lookup or item_id in seen_ids or item_id in off_topic_ids:
+            continue
+
+        item = item_lookup[item_id]
+        item["category"] = _validate_category(response_item.get("category"), item)
+        item["title"] = _clean_short_title(
+            response_item.get("short_title"),
+            _title_for_matching(item),
+        )
+        existing_summary_line = _clean_summary_line(item.get("summary_line", ""))
+        item["summary_line"] = (
+            _clean_summary_line(response_item.get("summary_line", ""))
+            or existing_summary_line
+            or _fallback_summary_line(item)
+        )
+        raw_tier = str(response_item.get("tier", "normal")).strip().lower()
+        item["tier"] = raw_tier if raw_tier in ("high", "normal") else "normal"
+        enriched_items.append(item)
+        seen_ids.add(item_id)
+
+    for item_id, item in item_lookup.items():
+        if item_id in seen_ids or item_id in off_topic_ids:
+            continue
+        enriched_items.append(item)
+
+    state["executive_summary"] = executive_summary
+    state["top_stories"] = top_story_ids
+    return _finalize_items(
+        state,
+        enriched_items,
+        skipped_items + len(off_topic_ids),
+        log_label=log_label,
+    )
 
 
 def _apply_structured_response(
@@ -754,7 +1014,9 @@ def _apply_structured_response(
                     duplicate_ids.append(duplicate_id)
 
             keep_item = group_prompt_ids[keep_id]
-            duplicate_items = [group_prompt_ids[dup_id] for dup_id in duplicate_ids]
+            duplicate_items = _sort_items_by_source_role(
+                [group_prompt_ids[dup_id] for dup_id in duplicate_ids]
+            )
             keep_item["category"] = _validate_category(cluster.get("category"), keep_item)
             keep_item["title"] = _clean_short_title(
                 cluster.get("short_title"),
@@ -769,8 +1031,8 @@ def _apply_structured_response(
             keep_item["tier"] = raw_tier if raw_tier in ("high", "normal") else "normal"
 
             coverage_sources: list[str] = []
-            for dup_id in duplicate_ids:
-                dup_source = str(group_prompt_ids[dup_id].get("source", "")).strip()
+            for duplicate_item in duplicate_items:
+                dup_source = str(duplicate_item.get("source", "")).strip()
                 if dup_source and dup_source not in coverage_sources:
                     coverage_sources.append(dup_source)
             keep_item["coverage_sources"] = coverage_sources
@@ -869,7 +1131,18 @@ def node_categorize(state: DigestState) -> DigestState:
         return state
 
     groups = _build_candidate_groups(items)
+    indexed_groups = list(enumerate(groups, start=1))
     ambiguous_groups = [group for group in groups if len(group) > 1]
+    ambiguous_indexed_groups = [
+        (group_index, group)
+        for group_index, group in indexed_groups
+        if len(group) > 1
+    ]
+    distinct_indexed_groups = [
+        (group_index, group)
+        for group_index, group in indexed_groups
+        if len(group) == 1
+    ]
     logger.info(
         "Built %d candidate groups (%d ambiguous)",
         len(groups),
@@ -893,48 +1166,34 @@ def node_categorize(state: DigestState) -> DigestState:
 
     try:
         client = _get_openai_client(api_key)
+        skipped_items = 0
+        resolved_items = _prepare_distinct_items(distinct_indexed_groups)
 
-        prompt_payload = json.dumps(
-            {"groups": _build_candidate_snapshot_groups(groups)},
-            ensure_ascii=True,
-        )
-        categories_str = "\n".join(f"- {category}" for category in CATEGORIES)
-
-        prompt = f"""Deduplicate and categorize these biotech and pharma news items.
+        if ambiguous_indexed_groups:
+            dedupe_payload = json.dumps(
+                {"groups": _build_dedupe_prompt_groups(ambiguous_indexed_groups)},
+                ensure_ascii=True,
+            )
+            dedupe_prompt = f"""Deduplicate these biotech and pharma news groups.
 
 Each group contains possible near-duplicates. Only compare items within the same group.
 
 Rules:
 - If multiple items cover the same event, keep the most informative one.
-- Prefer primary or official sources when they cover the same event as secondary coverage.
+- Input items include source_role. When stories are otherwise equivalent, prefer keep_id using this order: primary, independent_reporting, commentary, community.
 - Preserve distinct stories from the same company.
-- Use the original title and summary to decide duplicates.
-- Mark clearly off-topic items for a biotech/pharma industry digest as off-topic.
-- For each kept item, assign exactly one category from this list:
-{categories_str}
-- For each kept item, provide a short_title of {_SHORT_TITLE_MAX_WORDS} words or fewer.
-- For each kept item, provide a summary_line: one plain-English sentence explaining why a general reader should care about this story.
-- For each kept item, assign a tier: "high" if the story has broad impact, strong novelty, solid evidence, or high practical relevance; otherwise "normal".
+- Use the title and summary to decide duplicates.
 - If items in a group are distinct, return separate clusters for them.
-- After processing all groups, write an executive_summary: 2-3 sentences capturing the day's most important biotech/pharma themes.
-- Pick up to 3 most significant item_ids as top_stories, drawn from high-tier items when possible.
 
 Return JSON only with this schema:
 {{
-  "executive_summary": "2-3 sentence overview of today's biotech news.",
-  "top_stories": ["g1i1", "g3i2", "g5i1"],
   "groups": [
     {{
       "group_id": "g1",
-      "off_topic_ids": ["g1i3"],
       "clusters": [
         {{
           "keep_id": "g1i1",
-          "duplicate_ids": ["g1i2"],
-          "category": "Clinical & Research",
-          "short_title": "Example short title",
-          "summary_line": "Why this matters in one sentence.",
-          "tier": "high"
+          "duplicate_ids": ["g1i2"]
         }}
       ]
     }}
@@ -942,15 +1201,64 @@ Return JSON only with this schema:
 }}
 
 Input JSON:
-{prompt_payload}
+{dedupe_payload}
 """
 
-        response_text = _chat_completion_text(client, prompt)
-        response_payload = _extract_json_object(response_text)
-        return _apply_structured_response(
+            dedupe_response = _extract_json_object(_chat_completion_text(client, dedupe_prompt))
+            deduped_items, skipped_items = _apply_dedupe_response(
+                ambiguous_indexed_groups,
+                dedupe_response,
+            )
+            resolved_items.extend(deduped_items)
+
+        categories_str = "\n".join(f"- {category}" for category in CATEGORIES)
+        enrichment_payload = json.dumps(
+            {"items": [_serialize_enrichment_item(item) for item in resolved_items]},
+            ensure_ascii=True,
+        )
+        enrichment_prompt = f"""Enrich these deduplicated biotech and pharma news items for the daily digest.
+
+Each item is already deduplicated.
+
+Rules:
+- Mark clearly off-topic items for a biotech/pharma industry digest as off-topic.
+- For each remaining item, assign exactly one category from this list:
+{categories_str}
+- For each item, provide a short_title of {_SHORT_TITLE_MAX_WORDS} words or fewer.
+- For each item, provide a summary_line: one plain-English sentence explaining why a general reader should care about this story.
+- For each item, assign a tier: "high" if the story has broad impact, strong novelty, solid evidence, or high practical relevance; otherwise "normal".
+- Use source_role and coverage_count as signals for authority and importance.
+- Write an executive_summary: 2-3 sentences capturing the day's most important biotech/pharma themes.
+- Pick up to 3 most significant item_ids as top_stories, drawn from high-tier items when possible.
+
+Return JSON only with this schema:
+{{
+  "executive_summary": "2-3 sentence overview of today's biotech news.",
+  "top_stories": ["g1i1", "g3i2", "g5i1"],
+  "off_topic_ids": ["g2i1"],
+  "items": [
+    {{
+      "item_id": "g1i1",
+      "category": "Clinical & Research",
+      "short_title": "Example short title",
+      "summary_line": "Why this matters in one sentence.",
+      "tier": "high"
+    }}
+  ]
+}}
+
+Input JSON:
+{enrichment_payload}
+"""
+
+        enrichment_response = _extract_json_object(
+            _chat_completion_text(client, enrichment_prompt)
+        )
+        return _apply_enrichment_response(
             state,
-            groups,
-            response_payload,
+            resolved_items,
+            enrichment_response,
+            skipped_items=skipped_items,
             log_label="After categorization",
         )
     except Exception as exc:

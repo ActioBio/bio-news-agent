@@ -1,50 +1,62 @@
 {
   "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/press-releases/rss.xml": {
     "category": "All",
-    "source": "FDA"
+    "source": "FDA",
+    "source_role": "primary"
   },
   "https://www.statnews.com/category/biotech/feed/": {
     "category": "All",
-    "source": "STAT Biotech"
+    "source": "STAT Biotech",
+    "source_role": "independent_reporting"
   },
   "https://www.statnews.com/category/pharma/feed/": {
     "category": "All",
-    "source": "STAT Pharma"
+    "source": "STAT Pharma",
+    "source_role": "independent_reporting"
   },
   "https://endpts.com/feed/": {
     "category": "All",
-    "source": "Endpoints News"
+    "source": "Endpoints News",
+    "source_role": "independent_reporting"
   },
   "https://www.fiercebiotech.com/rss/xml": {
     "category": "All",
-    "source": "FierceBiotech"
+    "source": "FierceBiotech",
+    "source_role": "independent_reporting"
   },
   "https://www.fiercepharma.com/rss/xml": {
     "category": "All",
-    "source": "FiercePharma"
+    "source": "FiercePharma",
+    "source_role": "independent_reporting"
   },
   "https://www.nature.com/nrd.rss": {
     "category": "All",
-    "source": "Nature Reviews Drug Discovery"
+    "source": "Nature Reviews Drug Discovery",
+    "source_role": "commentary"
   },
   "https://www.biopharmadive.com/feeds/news/": {
     "category": "All",
-    "source": "BioPharma Dive"
+    "source": "BioPharma Dive",
+    "source_role": "independent_reporting"
   },
   "https://www.ema.europa.eu/en/news.xml": {
     "category": "All",
-    "source": "EMA"
+    "source": "EMA",
+    "source_role": "primary"
   },
   "https://www.biospace.com/drug-development.rss": {
     "category": "All",
-    "source": "BioSpace Drug Development"
+    "source": "BioSpace Drug Development",
+    "source_role": "independent_reporting"
   },
   "https://www.biospace.com/FDA.rss": {
     "category": "All",
-    "source": "BioSpace FDA"
+    "source": "BioSpace FDA",
+    "source_role": "independent_reporting"
   },
   "https://www.biospace.com/business.rss": {
     "category": "All",
-    "source": "BioSpace Business"
+    "source": "BioSpace Business",
+    "source_role": "independent_reporting"
   }
 }

@@ -152,20 +152,26 @@ Agent decisions should use this JSON shape:
 
 After `--apply-decisions`, the existing issue publishing step can post `news.md` as usual.
 
+The default digest output is compact and title-first. `executive_summary` and `summary_line` are optional enrichment fields; the renderer keeps top stories and category sections skimmable even when those fields are present.
+
 ## Feed configuration
 
 The collector reads RSS feed URLs from [`feeds.json`](feeds.json) in the project root. The
 file should contain a JSON object where each key is a feed URL and each value
 specifies the `category` and human-readable `source` name.
 
-An optional `type` field can be used for source-specific handling such as paper limits:
+Optional fields:
+
+- `type`: source-specific handling such as paper limits
+- `source_role`: source authority for duplicate tie-breaks and ranking. Supported values: `primary`, `independent_reporting`, `commentary`, `community`.
 
 ```json
 {
   "https://example.com/feed.xml": {
     "source": "Example Feed",
     "category": "All",
-    "type": "news"
+    "type": "news",
+    "source_role": "independent_reporting"
   }
 }
 ```
@@ -177,6 +183,6 @@ Pipeline notes:
 - Obvious noise titles such as webinars, sponsored posts, and opinion items are dropped before grouping.
 - The source cap is still applied before LLM dedupe for diversity and lower cost.
 - Placeholder OpenAI API keys from either the shell environment or `.env` are ignored for local runs.
-- LLM request timeouts fall back to local duplicate resolution instead of repeatedly retrying.
+- LLM request timeouts retry before falling back to local duplicate resolution.
 - The LLM receives candidate groups and returns structured duplicate clusters instead of line-based `SKIP` output.
 - Short display titles are generated only for kept items after duplicates are resolved.

@@ -73,6 +73,29 @@ class TestToMarkdown:
         older_pos = result.find("Older Story")
         assert newer_pos < older_pos
 
+    def test_prefers_primary_source_over_newer_commentary_when_tier_matches(self):
+        items = [
+            {
+                "title": "Commentary take",
+                "link": "https://example.com/1",
+                "source": "Newsletter",
+                "source_role": "commentary",
+                "category": "Company News",
+                "published": datetime(2024, 1, 2, tzinfo=timezone.utc),
+            },
+            {
+                "title": "FDA notice",
+                "link": "https://example.com/2",
+                "source": "FDA",
+                "source_role": "primary",
+                "category": "Company News",
+                "published": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            },
+        ]
+
+        result = to_markdown(items)
+        assert result.find("FDA notice") < result.find("Commentary take")
+
     def test_unknown_category_maps_to_company_news(self):
         items = [
             {
@@ -99,3 +122,45 @@ class TestToMarkdown:
         ]
         result = to_markdown(items)
         assert "[Headline with spaces]" in result
+
+    def test_uses_compact_lines_without_summary_text(self):
+        items = [
+            {
+                "title": "Compact Bio Story",
+                "link": "https://example.com/1",
+                "source": "Source A",
+                "category": "Company News",
+                "summary_line": "This should not be rendered.",
+                "coverage_sources": ["Source B"],
+                "published": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            },
+        ]
+
+        result = to_markdown(items, executive_summary="This should stay hidden.")
+        assert "This should not be rendered." not in result
+        assert "This should stay hidden." not in result
+        assert "- [Compact Bio Story](https://example.com/1) — Source A (2 sources)" in result
+
+    def test_does_not_repeat_top_story_in_category_sections(self):
+        items = [
+            {
+                "title": "Top Bio Story",
+                "link": "https://example.com/top",
+                "source": "Source A",
+                "category": "Company News",
+                "_prompt_id": "item-1",
+                "published": datetime(2024, 1, 2, tzinfo=timezone.utc),
+            },
+            {
+                "title": "Second Bio Story",
+                "link": "https://example.com/second",
+                "source": "Source B",
+                "category": "Company News",
+                "_prompt_id": "item-2",
+                "published": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            },
+        ]
+
+        result = to_markdown(items, top_stories=["item-1"])
+        assert result.count("Top Bio Story") == 1
+        assert "Second Bio Story" in result

@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "kind": "bio-news-agent.candidates",
   "categories": [
     "Regulatory & FDA",
@@ -23,7 +23,8 @@
           "published": "2026-01-01T12:00:00+00:00",
           "summary": "Official release for the phase 3 oncology study",
           "category": "All",
-          "source_type": "news"
+          "source_type": "news",
+          "source_role": "primary"
         },
         {
           "item_id": "g1i2",
@@ -35,7 +36,8 @@
           "published": "2026-01-01T11:00:00+00:00",
           "summary": "Coverage of the same phase 3 oncology trial",
           "category": "All",
-          "source_type": "news"
+          "source_type": "news",
+          "source_role": "independent_reporting"
         }
       ]
     },
@@ -52,7 +54,8 @@
           "published": "2026-01-01T10:00:00+00:00",
           "summary": "",
           "category": "All",
-          "source_type": "news"
+          "source_type": "news",
+          "source_role": "commentary"
         }
       ]
     }

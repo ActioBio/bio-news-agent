@@ -38,6 +38,7 @@ def _item(
     summary: str = "",
     category: str = "All",
     source_type: str = "news",
+    source_role: str = "independent_reporting",
 ) -> dict[str, object]:
     return {
         "id": item_id,
@@ -49,6 +50,7 @@ def _item(
         "category": category,
         "summary": summary,
         "source_type": source_type,
+        "source_role": source_role,
     }
 
 
@@ -113,6 +115,29 @@ def test_build_candidate_groups_clusters_possible_duplicates():
     assert {item["id"] for item in groups[0]} == {"a", "b"}
 
 
+def test_build_candidate_groups_prefers_primary_source_within_group():
+    items = [
+        _item(
+            "a",
+            "Pfizer announces phase 3 oncology trial results",
+            11,
+            source="Pfizer",
+            source_role="primary",
+        ),
+        _item(
+            "b",
+            "Pfizer reports phase 3 oncology trial data",
+            12,
+            source="Endpoints News",
+            source_role="independent_reporting",
+        ),
+    ]
+
+    groups = _build_candidate_groups(items)
+
+    assert [item["id"] for item in groups[0]] == ["a", "b"]
+
+
 def test_build_candidate_snapshot_preserves_group_ids():
     items = [
         _item(
@@ -121,6 +146,7 @@ def test_build_candidate_snapshot_preserves_group_ids():
             12,
             source="Pfizer",
             summary="Official release for the phase 3 oncology study",
+            source_role="primary",
         ),
         _item(
             "b",
@@ -128,6 +154,7 @@ def test_build_candidate_snapshot_preserves_group_ids():
             11,
             source="Endpoints News",
             summary="Coverage of the same phase 3 oncology trial",
+            source_role="independent_reporting",
         ),
     ]
 
@@ -147,6 +174,7 @@ def test_build_candidate_snapshot_matches_contract_fixture():
             12,
             source="Pfizer",
             summary="Official release for the phase 3 oncology study",
+            source_role="primary",
         ),
         _item(
             "b",
@@ -154,12 +182,14 @@ def test_build_candidate_snapshot_matches_contract_fixture():
             11,
             source="Endpoints News",
             summary="Coverage of the same phase 3 oncology trial",
+            source_role="independent_reporting",
         ),
         _item(
             "c",
             "Hospital cafeterias debate protein shake trends",
             10,
             source="Lifestyle Weekly",
+            source_role="commentary",
         ),
     ]
 
@@ -205,38 +235,53 @@ def test_node_categorize_uses_structured_llm_response(monkeypatch):
             source="Lifestyle Weekly",
         ),
     ]
-    response = {
-        "executive_summary": "Pfizer posted positive oncology data.",
-        "top_stories": ["g1i1"],
+    dedupe_response = {
         "groups": [
             {
                 "group_id": "g1",
-                "off_topic_ids": [],
                 "clusters": [
                     {
                         "keep_id": "g1i1",
                         "duplicate_ids": ["g1i2"],
-                        "category": "Clinical & Research",
-                        "short_title": "Pfizer posts oncology trial results",
-                        "summary_line": "Phase 3 data could advance a new treatment.",
-                        "tier": "high",
                     }
                 ],
-            },
-            {
-                "group_id": "g2",
-                "off_topic_ids": ["g2i1"],
-                "clusters": [],
-            },
+            }
         ],
     }
+    enrichment_response = {
+        "executive_summary": "Pfizer posted positive oncology data.",
+        "top_stories": ["g1i1"],
+        "off_topic_ids": ["g2i1"],
+        "items": [
+            {
+                "item_id": "g1i1",
+                "category": "Clinical & Research",
+                "short_title": "Pfizer posts oncology trial results",
+                "summary_line": "Phase 3 data could advance a new treatment.",
+                "tier": "high",
+            }
+        ],
+    }
+    prompts: list[str] = []
+    responses = iter([
+        json.dumps(dedupe_response),
+        json.dumps(enrichment_response),
+    ])
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(graph, "_get_openai_client", lambda _api_key: object())
-    monkeypatch.setattr(graph, "_chat_completion_text", lambda _client, _prompt: json.dumps(response))
+
+    def fake_chat_completion(_client, prompt: str) -> str:
+        prompts.append(prompt)
+        return next(responses)
+
+    monkeypatch.setattr(graph, "_chat_completion_text", fake_chat_completion)
 
     result = node_categorize({"items": items})
 
+    assert len(prompts) == 2
+    assert "Deduplicate these biotech and pharma news groups." in prompts[0]
+    assert "Enrich these deduplicated biotech and pharma news items" in prompts[1]
     assert len(result["items"]) == 1
     assert result["items"][0]["title"] == "Pfizer posts oncology trial results"
     assert result["items"][0]["category"] == "Clinical & Research"
@@ -246,6 +291,50 @@ def test_node_categorize_uses_structured_llm_response(monkeypatch):
     assert result["items"][0]["coverage_sources"] == ["Endpoints News"]
     assert result["executive_summary"] == "Pfizer posted positive oncology data."
     assert result["top_stories"] == ["g1i1"]
+
+
+def test_node_categorize_skips_dedupe_call_when_no_ambiguous_groups(monkeypatch):
+    items = [
+        _item("a", "FDA issues new safety update", 12, source="FDA"),
+        _item("b", "Pfizer names new oncology lead", 11, source="Pfizer"),
+    ]
+    enrichment_response = {
+        "executive_summary": "FDA and Pfizer drove the day's main biotech updates.",
+        "top_stories": ["g1i1"],
+        "off_topic_ids": [],
+        "items": [
+            {
+                "item_id": "g1i1",
+                "category": "Regulatory & FDA",
+                "short_title": "FDA issues safety update",
+                "summary_line": "The agency published a new drug safety notice.",
+                "tier": "high",
+            },
+            {
+                "item_id": "g2i1",
+                "category": "Company News",
+                "short_title": "Pfizer names oncology lead",
+                "summary_line": "Pfizer announced a leadership change in oncology.",
+                "tier": "normal",
+            },
+        ],
+    }
+    prompts: list[str] = []
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(graph, "_get_openai_client", lambda _api_key: object())
+
+    def fake_chat_completion(_client, prompt: str) -> str:
+        prompts.append(prompt)
+        return json.dumps(enrichment_response)
+
+    monkeypatch.setattr(graph, "_chat_completion_text", fake_chat_completion)
+
+    result = node_categorize({"items": items})
+
+    assert len(prompts) == 1
+    assert "Enrich these deduplicated biotech and pharma news items" in prompts[0]
+    assert len(result["items"]) == 2
 
 
 def test_node_categorize_without_api_key_uses_local_resolution(monkeypatch):
@@ -308,22 +397,37 @@ def test_node_categorize_uses_dotenv_api_key_when_env_is_placeholder(monkeypatch
             summary="Coverage of the same phase 3 oncology trial",
         ),
     ]
-    response = {
-        "groups": [
+    responses = iter([
+        json.dumps(
             {
-                "group_id": "g1",
-                "off_topic_ids": [],
-                "clusters": [
+                "groups": [
                     {
-                        "keep_id": "g1i1",
-                        "duplicate_ids": ["g1i2"],
+                        "group_id": "g1",
+                        "clusters": [
+                            {
+                                "keep_id": "g1i1",
+                                "duplicate_ids": ["g1i2"],
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        json.dumps(
+            {
+                "executive_summary": "",
+                "top_stories": [],
+                "off_topic_ids": [],
+                "items": [
+                    {
+                        "item_id": "g1i1",
                         "category": "Clinical & Research",
                         "short_title": "Pfizer posts oncology trial results",
                     }
                 ],
             }
-        ]
-    }
+        ),
+    ])
     captured: dict[str, str] = {}
 
     monkeypatch.setenv("OPENAI_API_KEY", "your_api_key_here")
@@ -335,7 +439,7 @@ def test_node_categorize_uses_dotenv_api_key_when_env_is_placeholder(monkeypatch
         return object()
 
     monkeypatch.setattr(graph, "_get_openai_client", fake_get_openai_client)
-    monkeypatch.setattr(graph, "_chat_completion_text", lambda _client, _prompt: json.dumps(response))
+    monkeypatch.setattr(graph, "_chat_completion_text", lambda _client, _prompt: next(responses))
 
     result = node_categorize({"items": items})
 
@@ -535,6 +639,95 @@ def test_apply_structured_response_uses_duplicate_summary_when_keep_summary_is_b
 
     assert result["items"][0]["summary_line"] == "Independent reporting explains why the phase 3 readout matters."
     assert result["items"][0]["coverage_sources"] == ["Endpoints News"]
+
+
+def test_apply_structured_response_orders_duplicate_fallbacks_by_source_role():
+    state = {"items": [], "executive_summary": "", "top_stories": []}
+    groups = [[
+        _item(
+            "a",
+            "FDA announces new approval",
+            12,
+            source="FDA",
+            source_role="primary",
+        ),
+        _item(
+            "b",
+            "FDA approval coverage",
+            11,
+            source="Endpoints News",
+            summary="Independent summary second.",
+            source_role="independent_reporting",
+        ),
+        _item(
+            "c",
+            "FDA approval analysis",
+            10,
+            source="Newsletter",
+            summary="Commentary summary first.",
+            source_role="commentary",
+        ),
+    ]]
+    response = {
+        "groups": [
+            {
+                "group_id": "g1",
+                "off_topic_ids": [],
+                "clusters": [
+                    {
+                        "keep_id": "g1i1",
+                        "duplicate_ids": ["g1i3", "g1i2"],
+                        "category": "Regulatory & FDA",
+                        "short_title": "FDA announces new approval",
+                    }
+                ],
+            }
+        ]
+    }
+
+    result = graph._apply_structured_response(state, groups, response, log_label="test")
+
+    assert result["items"][0]["summary_line"] == "Independent summary second."
+    assert result["items"][0]["coverage_sources"] == ["Endpoints News", "Newsletter"]
+
+
+def test_apply_enrichment_response_preserves_seeded_summary_line_when_model_omits_it():
+    item = {
+        "title": "Primary keep",
+        "original_title": "Primary keep",
+        "summary": "",
+        "summary_line": "Independent reporting summary.",
+        "source": "FDA",
+        "source_role": "primary",
+        "_prompt_id": "g1i1",
+        "category": "Company News",
+        "tier": "normal",
+        "coverage_sources": ["Endpoints News"],
+        "published": datetime(2026, 4, 10, tzinfo=timezone.utc),
+        "link": "https://example.com/1",
+    }
+    response = {
+        "executive_summary": "",
+        "top_stories": [],
+        "off_topic_ids": [],
+        "items": [
+            {
+                "item_id": "g1i1",
+                "category": "Regulatory & FDA",
+                "short_title": "Primary keep",
+            }
+        ],
+    }
+
+    result = graph._apply_enrichment_response(
+        {"items": [], "executive_summary": "", "top_stories": []},
+        [item],
+        response,
+        skipped_items=1,
+        log_label="test",
+    )
+
+    assert result["items"][0]["summary_line"] == "Independent reporting summary."
 
 
 def test_should_retry_openai_error_retries_timeout():

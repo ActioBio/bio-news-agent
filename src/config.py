@@ -31,7 +31,7 @@ def _get_env_int(name: str, default: int) -> int:
 # ── OpenAI ───────────────────────────────────────────────────────
 OPENAI_API_KEY: str = _get_env_str("OPENAI_API_KEY", "")
 OPENAI_MODEL: str = _get_env_str("OPENAI_MODEL", "gpt-5-mini")
-OPENAI_TIMEOUT_SECONDS: int = _get_env_int("OPENAI_TIMEOUT_SECONDS", 30)
+OPENAI_TIMEOUT_SECONDS: int = _get_env_int("OPENAI_TIMEOUT_SECONDS", 60)
 OPENAI_RETRIES: int = _get_env_int("OPENAI_RETRIES", 2)
 DIGEST_OUTPUT_FILE: str = _get_env_str("DIGEST_OUTPUT_FILE", "news.md")
 

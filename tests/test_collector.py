@@ -94,6 +94,7 @@ def test_collect_items_keeps_entries_when_bozo(monkeypatch):
     assert items[0]["title"] == "Valid story"
     assert items[0]["summary"] == "Valid summary"
     assert items[0]["source_type"] == "paper"
+    assert items[0]["source_role"] == "independent_reporting"
 
 
 def test_load_feeds_defaults_missing_source(tmp_path, monkeypatch):
@@ -105,6 +106,20 @@ def test_load_feeds_defaults_missing_source(tmp_path, monkeypatch):
 
     assert feeds["https://example.com/rss"]["source"] == "example.com"
     assert feeds["https://example.com/rss"]["type"] == "news"
+    assert feeds["https://example.com/rss"]["source_role"] == "independent_reporting"
+
+
+def test_load_feeds_preserves_source_role(tmp_path, monkeypatch):
+    feeds_path = tmp_path / "feeds.json"
+    feeds_path.write_text(
+        '{"https://example.com/rss":{"category":"All","source":"Example","source_role":"primary"}}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(collector, "_FEEDS_FILE", feeds_path)
+    feeds = collector._load_feeds()
+
+    assert feeds["https://example.com/rss"]["source_role"] == "primary"
 
 
 def test_collect_items_skips_failed_feeds(monkeypatch):
@@ -151,3 +166,4 @@ def test_collect_items_skips_failed_feeds(monkeypatch):
 
     assert len(items) == 1
     assert items[0]["source"] == "Good Feed"
+    assert items[0]["source_role"] == "independent_reporting"
