@@ -109,6 +109,7 @@ uv run python src/main.py
 ## Agent-driven mode
 
 This path keeps feed collection and filtering in Python, but lets Codex or Claude Code handle dedupe/categorization without `OPENAI_API_KEY`.
+For scheduled agent runs, prefer a local runner so the job can use your machine's network and GitHub auth; keep GitHub Actions as the later fallback.
 
 ```bash
 uv run python src/main.py --candidates-only
