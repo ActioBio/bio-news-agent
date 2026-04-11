@@ -37,6 +37,7 @@ DIGEST_OUTPUT_FILE: str = _get_env_str("DIGEST_OUTPUT_FILE", "news.md")
 
 # ── Pipeline limits ──────────────────────────────────────────────
 PAPER_LIMIT: int = _get_env_int("PAPER_LIMIT", 7)
+COMPANY_NEWS_LIMIT: int = _get_env_int("COMPANY_NEWS_LIMIT", 3)
 
 # ── RSS settings ─────────────────────────────────────────────────
 RSS_TIMEOUT: int = _get_env_int("RSS_TIMEOUT", 10)

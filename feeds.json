@@ -4,6 +4,16 @@
     "source": "FDA",
     "source_role": "primary"
   },
+  "https://www.gov.uk/government/organisations/medicines-and-healthcare-products-regulatory-agency.atom": {
+    "category": "All",
+    "source": "MHRA",
+    "source_role": "primary"
+  },
+  "https://www.nih.gov/news-releases/feed.xml": {
+    "category": "All",
+    "source": "NIH",
+    "source_role": "primary"
+  },
   "https://www.statnews.com/category/biotech/feed/": {
     "category": "All",
     "source": "STAT Biotech",
@@ -33,6 +43,12 @@
     "category": "All",
     "source": "Nature Reviews Drug Discovery",
     "source_role": "commentary"
+  },
+  "https://www.science.org/blogs/pipeline/feed": {
+    "category": "All",
+    "source": "Derek Lowe",
+    "source_role": "commentary",
+    "feed_mode": "discovery_only"
   },
   "https://www.biopharmadive.com/feeds/news/": {
     "category": "All",

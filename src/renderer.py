@@ -1,38 +1,17 @@
 """Render news items to markdown."""
 
 from collections import defaultdict
-from typing import Any
 
 try:
     from config import CATEGORIES
+    from item_types import ResolvedItem
+    from ranking import CATEGORY_ORDER as _CATEGORY_ORDER, render_sort_key as _render_sort_key
 except ModuleNotFoundError:  # pragma: no cover - module execution fallback
     from .config import CATEGORIES
+    from .item_types import ResolvedItem
+    from .ranking import CATEGORY_ORDER as _CATEGORY_ORDER, render_sort_key as _render_sort_key
 
-_CATEGORY_ORDER = list(CATEGORIES)
-_SOURCE_ROLE_PRIORITY = {
-    "primary": 3,
-    "independent_reporting": 2,
-    "commentary": 1,
-    "community": 0,
-}
-
-
-def _source_role_priority(value: Any) -> int:
-    source_role = str(value).strip().lower()
-    return _SOURCE_ROLE_PRIORITY.get(source_role, _SOURCE_ROLE_PRIORITY["independent_reporting"])
-
-
-def _render_sort_key(item: dict[str, Any]) -> tuple[float, float, float, float, str]:
-    return (
-        -(1 if item.get("tier") == "high" else 0),
-        -float(_source_role_priority(item.get("source_role"))),
-        -float(len(item.get("coverage_sources", []))),
-        -item["published"].timestamp(),
-        str(item.get("source", "")),
-    )
-
-
-def _render_item_line(item: dict[str, Any], *, bold: bool = False) -> str:
+def _render_item_line(item: ResolvedItem, *, bold: bool = False) -> str:
     title = item["title"].strip()
     link_text = f"**[{title}]({item['link']})**" if bold else f"[{title}]({item['link']})"
     coverage_sources: list[str] = item.get("coverage_sources", [])
@@ -41,7 +20,7 @@ def _render_item_line(item: dict[str, Any], *, bold: bool = False) -> str:
 
 
 def to_markdown(
-    items: list[dict[str, Any]],
+    items: list[ResolvedItem],
     *,
     executive_summary: str = "",
     top_stories: list[str] | None = None,
@@ -65,7 +44,7 @@ def to_markdown(
                 lines.append(_render_item_line(item, bold=True))
             lines.append("")
 
-    sections: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    sections: dict[str, list[ResolvedItem]] = defaultdict(list)
     for it in items:
         cat = it.get("category", "Other")
         if cat not in CATEGORIES:

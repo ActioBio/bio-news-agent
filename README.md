@@ -153,6 +153,7 @@ Agent decisions should use this JSON shape:
 After `--apply-decisions`, the existing issue publishing step can post `news.md` as usual.
 
 The default digest output is compact and title-first. `executive_summary` and `summary_line` are optional enrichment fields; the renderer keeps top stories and category sections skimmable even when those fields are present.
+By default, `Company News` is capped to the top 3 ranked items to keep the daily digest quick to scan.
 
 ## Feed configuration
 
@@ -164,6 +165,7 @@ Optional fields:
 
 - `type`: source-specific handling such as paper limits
 - `source_role`: source authority for duplicate tie-breaks and ranking. Supported values: `primary`, `independent_reporting`, `commentary`, `community`.
+- `feed_mode`: whether a feed is part of the main digest or supporting discovery only. Supported values: `core`, `discovery_only`.
 
 ```json
 {
@@ -171,7 +173,8 @@ Optional fields:
     "source": "Example Feed",
     "category": "All",
     "type": "news",
-    "source_role": "independent_reporting"
+    "source_role": "independent_reporting",
+    "feed_mode": "core"
   }
 }
 ```
@@ -180,8 +183,11 @@ Pipeline notes:
 
 - Exact duplicates are removed by normalized URL before any LLM call.
 - The collector preserves `original_title` and RSS `summary` for duplicate resolution.
-- Obvious noise titles such as webinars, sponsored posts, and opinion items are dropped before grouping.
+- Source-specific low-signal items such as webinars, sponsored posts, opinion pieces, people-move roundups, and bundled roundup headlines are dropped before grouping.
+- Mixed regulator and institutional feeds can also be gated by source-specific title or link rules before grouping.
 - The source cap is still applied before LLM dedupe for diversity and lower cost.
+- Lower-priority `Company News` items are capped after ranking to keep fallback digests compact.
+- `discovery_only` feeds can still merge into a core story and contribute coverage context, but standalone discovery-only items are dropped before final render.
 - Placeholder OpenAI API keys from either the shell environment or `.env` are ignored for local runs.
 - LLM request timeouts retry before falling back to local duplicate resolution.
 - The LLM receives candidate groups and returns structured duplicate clusters instead of line-based `SKIP` output.

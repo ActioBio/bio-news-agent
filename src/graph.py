@@ -14,7 +14,7 @@ from collections import defaultdict
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, Callable, TypedDict, cast
 
 from dotenv import dotenv_values
 from langgraph.graph import StateGraph
@@ -31,6 +31,7 @@ try:
     from collector import collect_items
     from config import (
         CATEGORIES,
+        COMPANY_NEWS_LIMIT,
         COMPANY_NAMES,
         DIGEST_OUTPUT_FILE,
         MAX_ITEMS_PER_SOURCE,
@@ -41,12 +42,22 @@ try:
         OPENAI_TIMEOUT_SECONDS,
         PAPER_LIMIT,
     )
+    from finalize import finalize_items as _finalize_items
     from filterer import deduplicate, exclude_noise
+    from item_types import CandidateItem, CollectedItem, EnrichmentItem, ResolvedItem
+    from ranking import (
+        group_item_sort_key as _group_item_sort_key,
+        normalize_feed_mode as _normalize_feed_mode,
+        normalize_source_role as _normalize_source_role,
+        select_top_story_ids as _select_top_story_ids,
+        sort_items_by_source_role as _sort_items_by_source_role,
+    )
     from renderer import to_markdown
 except ModuleNotFoundError:  # pragma: no cover - module execution fallback
     from .collector import collect_items
     from .config import (
         CATEGORIES,
+        COMPANY_NEWS_LIMIT,
         COMPANY_NAMES,
         DIGEST_OUTPUT_FILE,
         MAX_ITEMS_PER_SOURCE,
@@ -57,7 +68,16 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
         OPENAI_TIMEOUT_SECONDS,
         PAPER_LIMIT,
     )
+    from .finalize import finalize_items as _finalize_items
     from .filterer import deduplicate, exclude_noise
+    from .item_types import CandidateItem, CollectedItem, EnrichmentItem, ResolvedItem
+    from .ranking import (
+        group_item_sort_key as _group_item_sort_key,
+        normalize_feed_mode as _normalize_feed_mode,
+        normalize_source_role as _normalize_source_role,
+        select_top_story_ids as _select_top_story_ids,
+        sort_items_by_source_role as _sort_items_by_source_role,
+    )
     from .renderer import to_markdown
 
 logger = logging.getLogger(__name__)
@@ -82,15 +102,9 @@ def _resolve_output_file(path_value: str) -> Path:
 
 
 _NEWS_FILE = _resolve_output_file(DIGEST_OUTPUT_FILE)
-_CANDIDATE_SNAPSHOT_VERSION = 3
+_CANDIDATE_SNAPSHOT_VERSION = 4
 _MAX_PROMPT_SUMMARY_CHARS = 280
 _SHORT_TITLE_MAX_WORDS = 8
-_SOURCE_ROLE_PRIORITY = {
-    "primary": 3,
-    "independent_reporting": 2,
-    "commentary": 1,
-    "community": 0,
-}
 _DUPLICATE_STOP_WORDS = {
     "about",
     "after",
@@ -120,6 +134,52 @@ _DUPLICATE_STOP_WORDS = {
     "with",
     "year",
 }
+_FALLBACK_DUPLICATE_GENERIC_TOKENS = {
+    "advanced",
+    "again",
+    "approval",
+    "approve",
+    "approved",
+    "approves",
+    "announced",
+    "announces",
+    "biotech",
+    "clinical",
+    "companies",
+    "company",
+    "drug",
+    "drugs",
+    "first",
+    "focus",
+    "industry",
+    "launch",
+    "launches",
+    "leadership",
+    "market",
+    "markets",
+    "phase",
+    "pharma",
+    "pricing",
+    "raised",
+    "raises",
+    "reject",
+    "rejected",
+    "rejects",
+    "research",
+    "request",
+    "requested",
+    "requests",
+    "safety",
+    "second",
+    "study",
+    "studies",
+    "therapy",
+    "therapies",
+    "trial",
+    "trials",
+    "update",
+    "updates",
+}
 
 
 class DigestState(TypedDict, total=False):
@@ -129,37 +189,24 @@ class DigestState(TypedDict, total=False):
     top_stories: list[str]
 
 
-def _normalize_source_role(value: Any) -> str:
-    source_role = str(value).strip().lower()
-    if source_role in _SOURCE_ROLE_PRIORITY:
-        return source_role
-    return "independent_reporting"
+def _promote_renderable_keep_id(
+    group_prompt_ids: dict[str, CollectedItem],
+    keep_id: str,
+    duplicate_ids: list[str],
+) -> str:
+    if _normalize_feed_mode(group_prompt_ids[keep_id].get("feed_mode")) != "discovery_only":
+        return keep_id
 
+    renderable_items = [
+        (prompt_id, group_prompt_ids[prompt_id])
+        for prompt_id in [keep_id, *duplicate_ids]
+        if _normalize_feed_mode(group_prompt_ids[prompt_id].get("feed_mode")) != "discovery_only"
+    ]
+    if not renderable_items:
+        return keep_id
 
-def _source_role_priority(value: Any) -> int:
-    return _SOURCE_ROLE_PRIORITY[_normalize_source_role(value)]
-
-
-def _group_item_sort_key(item: dict[str, Any]) -> tuple[float, float, str]:
-    return (
-        -float(_source_role_priority(item.get("source_role"))),
-        -item["published"].timestamp(),
-        str(item.get("source", "")),
-    )
-
-
-def _story_rank_key(item: dict[str, Any]) -> tuple[float, float, float, float, str]:
-    return (
-        -(1 if item.get("tier") == "high" else 0),
-        -float(_source_role_priority(item.get("source_role"))),
-        -float(len(item.get("coverage_sources", []))),
-        -item["published"].timestamp(),
-        str(item.get("source", "")),
-    )
-
-
-def _sort_items_by_source_role(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return sorted(items, key=_group_item_sort_key)
+    renderable_items.sort(key=lambda pair: _group_item_sort_key(pair[1]))
+    return renderable_items[0][0]
 
 
 class ItemMatchData(TypedDict):
@@ -249,7 +296,7 @@ def _chat_completion_text(client: OpenAI, prompt: str) -> str:
     return content.strip() if content else ""
 
 
-def _title_for_matching(item: dict[str, Any]) -> str:
+def _title_for_matching(item: CollectedItem) -> str:
     original_title = str(item.get("original_title", "")).strip()
     if original_title:
         return original_title
@@ -264,7 +311,7 @@ def _significant_tokens(text: str) -> set[str]:
     }
 
 
-def _summary_tokens(item: dict[str, Any]) -> set[str]:
+def _summary_tokens(item: CollectedItem) -> set[str]:
     summary = str(item.get("summary", "")).strip()
     if not summary:
         return set()
@@ -280,13 +327,28 @@ def _mentioned_company(title: str) -> str | None:
     return None
 
 
-def _build_item_match_data(item: dict[str, Any]) -> ItemMatchData:
+def _build_item_match_data(item: CollectedItem) -> ItemMatchData:
     title = _title_for_matching(item)
     title_tokens = _significant_tokens(title)
     return {
         "company": _mentioned_company(title),
         "context_tokens": title_tokens | _summary_tokens(item),
         "title_tokens": title_tokens,
+    }
+
+
+def _merge_item_match_data(existing: ItemMatchData, candidate: ItemMatchData) -> ItemMatchData:
+    company = existing["company"]
+    candidate_company = candidate["company"]
+    if company and candidate_company and company != candidate_company:
+        company = None
+    elif not company:
+        company = candidate_company
+
+    return {
+        "company": company,
+        "context_tokens": existing["context_tokens"] | candidate["context_tokens"],
+        "title_tokens": existing["title_tokens"] | candidate["title_tokens"],
     }
 
 
@@ -316,8 +378,8 @@ def _is_high_confidence_duplicate_data(
 
 
 def _is_high_confidence_duplicate(
-    existing: dict[str, Any],
-    candidate: dict[str, Any],
+    existing: CollectedItem,
+    candidate: CollectedItem,
 ) -> bool:
     return _is_high_confidence_duplicate_data(
         _build_item_match_data(existing),
@@ -350,7 +412,23 @@ def _is_candidate_duplicate_data(
     return len(title_overlap) >= 2 and len(context_overlap) >= 5
 
 
-def _build_candidate_groups(items: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+def _is_fallback_candidate_duplicate_data(
+    existing: ItemMatchData,
+    candidate: ItemMatchData,
+) -> bool:
+    if _is_candidate_duplicate_data(existing, candidate):
+        return True
+
+    context_overlap = existing["context_tokens"] & candidate["context_tokens"]
+    anchor_overlap = {
+        token
+        for token in context_overlap
+        if len(token) >= 6 and token not in _FALLBACK_DUPLICATE_GENERIC_TOKENS
+    }
+    return len(anchor_overlap) >= 2 and len(context_overlap) >= 3
+
+
+def _build_candidate_groups(items: list[CollectedItem]) -> list[list[CollectedItem]]:
     if not items:
         return []
 
@@ -362,7 +440,54 @@ def _build_candidate_groups(items: list[dict[str, Any]]) -> list[list[dict[str, 
                 adjacency[left_index].add(right_index)
                 adjacency[right_index].add(left_index)
 
-    groups: list[list[dict[str, Any]]] = []
+    groups: list[list[CollectedItem]] = []
+    visited: set[int] = set()
+    for index in range(len(items)):
+        if index in visited:
+            continue
+
+        stack = [index]
+        component: list[int] = []
+        visited.add(index)
+        while stack:
+            current = stack.pop()
+            component.append(current)
+            for neighbor in adjacency[current]:
+                if neighbor in visited:
+                    continue
+                visited.add(neighbor)
+                stack.append(neighbor)
+
+        groups.append(
+            sorted(
+                (items[item_index] for item_index in component),
+                key=_group_item_sort_key,
+            )
+        )
+
+    return sorted(
+        groups,
+        key=lambda group: max(item["published"].timestamp() for item in group),
+        reverse=True,
+    )
+
+
+def _build_fallback_candidate_groups(items: list[CollectedItem]) -> list[list[CollectedItem]]:
+    if not items:
+        return []
+
+    match_data = [_build_item_match_data(item) for item in items]
+    adjacency: dict[int, set[int]] = {index: set() for index in range(len(items))}
+    for left_index in range(len(items)):
+        for right_index in range(left_index + 1, len(items)):
+            if _is_fallback_candidate_duplicate_data(
+                match_data[left_index],
+                match_data[right_index],
+            ):
+                adjacency[left_index].add(right_index)
+                adjacency[right_index].add(left_index)
+
+    groups: list[list[CollectedItem]] = []
     visited: set[int] = set()
     for index in range(len(items)):
         if index in visited:
@@ -401,7 +526,7 @@ def _clean_prompt_text(text: str, limit: int) -> str:
     return normalized[: limit - 3].rstrip() + "..."
 
 
-def _serialize_candidate_item(item_id: str, item: dict[str, Any]) -> dict[str, Any]:
+def _serialize_candidate_item(item_id: str, item: CollectedItem) -> CandidateItem:
     original_title = _title_for_matching(item)
     return {
         "item_id": item_id,
@@ -418,15 +543,17 @@ def _serialize_candidate_item(item_id: str, item: dict[str, Any]) -> dict[str, A
         "category": str(item.get("category", "")),
         "source_type": str(item.get("source_type", "")),
         "source_role": _normalize_source_role(item.get("source_role")),
+        "feed_mode": _normalize_feed_mode(item.get("feed_mode")),
     }
 
 
-def _serialize_dedupe_candidate_item(item_id: str, item: dict[str, Any]) -> dict[str, Any]:
+def _serialize_dedupe_candidate_item(item_id: str, item: CollectedItem) -> dict[str, Any]:
     return {
         "item_id": item_id,
         "title": _title_for_matching(item),
         "source": str(item.get("source", "")),
         "source_role": _normalize_source_role(item.get("source_role")),
+        "feed_mode": _normalize_feed_mode(item.get("feed_mode")),
         "summary": _clean_prompt_text(
             str(item.get("summary", "")),
             _MAX_PROMPT_SUMMARY_CHARS,
@@ -435,9 +562,9 @@ def _serialize_dedupe_candidate_item(item_id: str, item: dict[str, Any]) -> dict
 
 
 def _build_group_payloads(
-    indexed_groups: list[tuple[int, list[dict[str, Any]]]],
+    indexed_groups: list[tuple[int, list[CollectedItem]]],
     *,
-    item_serializer,
+    item_serializer: Callable[[str, CollectedItem], dict[str, Any]],
 ) -> list[dict[str, Any]]:
     payload_groups: list[dict[str, Any]] = []
 
@@ -457,7 +584,7 @@ def _build_group_payloads(
 
 
 def _build_candidate_snapshot_groups(
-    groups: list[list[dict[str, Any]]],
+    groups: list[list[CollectedItem]],
 ) -> list[dict[str, Any]]:
     return _build_group_payloads(
         list(enumerate(groups, start=1)),
@@ -466,7 +593,7 @@ def _build_candidate_snapshot_groups(
 
 
 def _build_dedupe_prompt_groups(
-    indexed_groups: list[tuple[int, list[dict[str, Any]]]],
+    indexed_groups: list[tuple[int, list[CollectedItem]]],
 ) -> list[dict[str, Any]]:
     return _build_group_payloads(
         indexed_groups,
@@ -474,7 +601,7 @@ def _build_dedupe_prompt_groups(
     )
 
 
-def build_candidate_snapshot(items: list[dict[str, Any]]) -> dict[str, Any]:
+def build_candidate_snapshot(items: list[CollectedItem]) -> dict[str, Any]:
     groups = _build_candidate_groups(items)
     return {
         "schema_version": _CANDIDATE_SNAPSHOT_VERSION,
@@ -484,7 +611,7 @@ def build_candidate_snapshot(items: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _deserialize_candidate_item(item_payload: dict[str, Any]) -> dict[str, Any]:
+def _deserialize_candidate_item(item_payload: dict[str, Any]) -> CollectedItem:
     published_value = item_payload.get("published")
     if not isinstance(published_value, str):
         raise ValueError("Candidate item is missing published timestamp")
@@ -503,15 +630,16 @@ def _deserialize_candidate_item(item_payload: dict[str, Any]) -> dict[str, Any]:
         "category": str(item_payload.get("category", "")),
         "source_type": str(item_payload.get("source_type", "")),
         "source_role": _normalize_source_role(item_payload.get("source_role")),
+        "feed_mode": _normalize_feed_mode(item_payload.get("feed_mode")),
     }
 
 
-def _candidate_groups_from_snapshot(snapshot_payload: dict[str, Any]) -> list[list[dict[str, Any]]]:
+def _candidate_groups_from_snapshot(snapshot_payload: dict[str, Any]) -> list[list[CollectedItem]]:
     raw_groups = snapshot_payload.get("groups", [])
     if not isinstance(raw_groups, list):
         raise ValueError("Candidate snapshot missing groups list")
 
-    groups: list[list[dict[str, Any]]] = []
+    groups: list[list[CollectedItem]] = []
     for group_payload in raw_groups:
         if not isinstance(group_payload, dict):
             raise ValueError("Candidate group must be an object")
@@ -528,13 +656,14 @@ def _candidate_groups_from_snapshot(snapshot_payload: dict[str, Any]) -> list[li
     return groups
 
 
-def _serialize_enrichment_item(item: dict[str, Any]) -> dict[str, Any]:
+def _serialize_enrichment_item(item: ResolvedItem) -> EnrichmentItem:
     prompt_id = str(item.get("_prompt_id", "")).strip()
     return {
         "item_id": prompt_id,
         "title": _title_for_matching(item),
         "source": str(item.get("source", "")),
         "source_role": _normalize_source_role(item.get("source_role")),
+        "feed_mode": _normalize_feed_mode(item.get("feed_mode")),
         "published": item["published"].isoformat(),
         "summary": _clean_prompt_text(
             str(item.get("summary", "")),
@@ -596,11 +725,11 @@ def _clean_summary_line(value: Any) -> str:
     return line
 
 
-def _fallback_summary_line(item: dict[str, Any]) -> str:
+def _fallback_summary_line(item: CollectedItem) -> str:
     return _clean_summary_line(item.get("summary", ""))
 
 
-def _best_available_summary_line(items: list[dict[str, Any]]) -> str:
+def _best_available_summary_line(items: list[CollectedItem]) -> str:
     for item in items:
         summary_line = _fallback_summary_line(item)
         if summary_line:
@@ -630,23 +759,19 @@ def _keyword_categorize(title: str) -> str:
     return "Company News"
 
 
-def _validate_category(value: Any, item: dict[str, Any]) -> str:
+def _validate_category(value: Any, item: CollectedItem) -> str:
     category = str(value).strip()
     if category in CATEGORIES:
         return category
     return _keyword_categorize(_title_for_matching(item))
 
 
-def _sort_items_by_recency(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return sorted(items, key=lambda item: item["published"], reverse=True)
-
-
-def _apply_source_cap(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+def _apply_source_cap(items: list[CollectedItem]) -> tuple[list[CollectedItem], int]:
     if MAX_ITEMS_PER_SOURCE <= 0:
         return items, 0
 
     source_counts: dict[str, int] = defaultdict(int)
-    filtered_items: list[dict[str, Any]] = []
+    filtered_items: list[CollectedItem] = []
     skipped_items = 0
 
     for item in items:
@@ -660,35 +785,16 @@ def _apply_source_cap(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
     return filtered_items, skipped_items
 
 
-def _is_paper_item(item: dict[str, Any]) -> bool:
-    source_type = str(item.get("source_type", "")).lower()
-    if source_type == "paper":
-        return True
-    return "papers" in str(item.get("source", "")).lower()
-
-
-def _limit_papers(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
-    paper_count = 0
-    filtered_items: list[dict[str, Any]] = []
-    skipped_papers = 0
-
-    for item in items:
-        if _is_paper_item(item):
-            if paper_count >= PAPER_LIMIT:
-                skipped_papers += 1
-                continue
-            paper_count += 1
-        filtered_items.append(item)
-
-    return filtered_items, skipped_papers
-
-
-def _fallback_resolve_groups(groups: list[list[dict[str, Any]]]) -> tuple[list[dict[str, Any]], int]:
-    kept_items: list[dict[str, Any]] = []
+def _fallback_resolve_groups(
+    groups: list[list[CollectedItem]],
+    *,
+    duplicate_matcher=_is_candidate_duplicate_data,
+) -> tuple[list[ResolvedItem], int]:
+    kept_items: list[ResolvedItem] = []
     skipped_items = 0
 
     for group_index, group in enumerate(groups, start=1):
-        resolved_group: list[dict[str, Any]] = []
+        resolved_group: list[ResolvedItem] = []
         resolved_match_data: list[ItemMatchData] = []
         for item_index, item in enumerate(group, start=1):
             item_match_data = _build_item_match_data(item)
@@ -696,13 +802,17 @@ def _fallback_resolve_groups(groups: list[list[dict[str, Any]]]) -> tuple[list[d
                 (
                     idx
                     for idx, existing_data in enumerate(resolved_match_data)
-                    if _is_candidate_duplicate_data(existing_data, item_match_data)
+                    if duplicate_matcher(existing_data, item_match_data)
                 ),
                 None,
             )
             if duplicate_index is not None:
                 skipped_items += 1
                 existing_item = resolved_group[duplicate_index]
+                resolved_match_data[duplicate_index] = _merge_item_match_data(
+                    resolved_match_data[duplicate_index],
+                    item_match_data,
+                )
                 if not existing_item.get("summary_line"):
                     existing_item["summary_line"] = _fallback_summary_line(item)
                 dup_source = str(item.get("source", "")).strip()
@@ -725,79 +835,31 @@ def _fallback_resolve_groups(groups: list[list[dict[str, Any]]]) -> tuple[list[d
     return kept_items, skipped_items
 
 
-def _select_top_story_ids(items: list[dict[str, Any]], requested_ids: list[str]) -> list[str]:
-    prompt_id_lookup = {
-        str(item.get("_prompt_id", "")).strip(): item
-        for item in items
-        if str(item.get("_prompt_id", "")).strip()
-    }
-
-    selected_ids: list[str] = []
-    for story_id in requested_ids:
-        if story_id in prompt_id_lookup and story_id not in selected_ids:
-            selected_ids.append(story_id)
-    if selected_ids:
-        return selected_ids[:3]
-
-    ranked_items = sorted(
-        prompt_id_lookup.values(),
-        key=_story_rank_key,
-    )
-    return [str(item["_prompt_id"]) for item in ranked_items[:3]]
-
-
-def _finalize_items(
-    state: DigestState,
-    items: list[dict[str, Any]],
-    skipped_items: int,
-    *,
-    log_label: str,
-) -> DigestState:
-    sorted_items = _sort_items_by_recency(items)
-    final_items, skipped_papers = _limit_papers(sorted_items)
-
-    if skipped_papers:
-        logger.info("Skipped %d additional papers (kept top %d)", skipped_papers, PAPER_LIMIT)
-
-    logger.info("%s: %d items (skipped %d items)", log_label, len(final_items), skipped_items)
-
-    categories: dict[str, int] = defaultdict(int)
-    for item in final_items:
-        categories[item.get("category", "Unknown")] += 1
-    logger.info("Category distribution: %s", dict(categories))
-
-    requested_top_stories = state.get("top_stories", [])
-    if not isinstance(requested_top_stories, list):
-        requested_top_stories = []
-    state["top_stories"] = _select_top_story_ids(final_items, requested_top_stories)
-    state["items"] = final_items
-    return state
-
-
 def _seed_resolved_item(
-    item: dict[str, Any],
+    item: CollectedItem,
     prompt_id: str,
     *,
-    duplicate_items: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
+    duplicate_items: list[CollectedItem] | None = None,
+) -> ResolvedItem:
     duplicate_items = duplicate_items or []
-    item["title"] = _title_for_matching(item)
-    item["category"] = _keyword_categorize(_title_for_matching(item))
-    item["_prompt_id"] = prompt_id
-    item["summary_line"] = _best_available_summary_line([item, *duplicate_items])
-    item["tier"] = "normal"
-    item["coverage_sources"] = [
+    resolved_item = cast(ResolvedItem, item)
+    resolved_item["title"] = _title_for_matching(item)
+    resolved_item["category"] = _keyword_categorize(_title_for_matching(item))
+    resolved_item["_prompt_id"] = prompt_id
+    resolved_item["summary_line"] = _best_available_summary_line([item, *duplicate_items])
+    resolved_item["tier"] = "normal"
+    resolved_item["coverage_sources"] = [
         str(duplicate_item.get("source", "")).strip()
         for duplicate_item in duplicate_items
         if str(duplicate_item.get("source", "")).strip()
     ]
-    return item
+    return resolved_item
 
 
 def _prepare_distinct_items(
-    indexed_groups: list[tuple[int, list[dict[str, Any]]]],
-) -> list[dict[str, Any]]:
-    prepared_items: list[dict[str, Any]] = []
+    indexed_groups: list[tuple[int, list[CollectedItem]]],
+) -> list[ResolvedItem]:
+    prepared_items: list[ResolvedItem] = []
     for group_index, group in indexed_groups:
         for item_index, item in enumerate(group, start=1):
             prepared_items.append(_seed_resolved_item(item, f"g{group_index}i{item_index}"))
@@ -805,9 +867,9 @@ def _prepare_distinct_items(
 
 
 def _apply_dedupe_response(
-    indexed_groups: list[tuple[int, list[dict[str, Any]]]],
+    indexed_groups: list[tuple[int, list[CollectedItem]]],
     response_payload: dict[str, Any],
-) -> tuple[list[dict[str, Any]], int]:
+) -> tuple[list[ResolvedItem], int]:
     response_groups = response_payload.get("groups", [])
     if not isinstance(response_groups, list):
         raise ValueError("LLM dedupe response missing groups list")
@@ -824,7 +886,7 @@ def _apply_dedupe_response(
             cluster for cluster in clusters if isinstance(cluster, dict)
         ]
 
-    kept_items: list[dict[str, Any]] = []
+    kept_items: list[ResolvedItem] = []
     skipped_items = 0
 
     for group_index, group in indexed_groups:
@@ -839,8 +901,8 @@ def _apply_dedupe_response(
         used_ids: set[str] = set()
 
         for cluster in response_group_lookup[group_id]:
-            keep_id = str(cluster.get("keep_id", "")).strip()
-            if keep_id not in group_prompt_ids or keep_id in used_ids:
+            requested_keep_id = str(cluster.get("keep_id", "")).strip()
+            if requested_keep_id not in group_prompt_ids or requested_keep_id in used_ids:
                 continue
 
             duplicate_ids: list[str] = []
@@ -848,14 +910,24 @@ def _apply_dedupe_response(
                 duplicate_id = str(raw_duplicate_id).strip()
                 if (
                     duplicate_id
-                    and duplicate_id != keep_id
+                    and duplicate_id != requested_keep_id
                     and duplicate_id in group_prompt_ids
                     and duplicate_id not in used_ids
                 ):
                     duplicate_ids.append(duplicate_id)
 
+            keep_id = _promote_renderable_keep_id(
+                group_prompt_ids,
+                requested_keep_id,
+                duplicate_ids,
+            )
+            cluster_member_ids = [
+                prompt_id
+                for prompt_id in [requested_keep_id, *duplicate_ids]
+                if prompt_id != keep_id
+            ]
             duplicate_items = _sort_items_by_source_role(
-                [group_prompt_ids[dup_id] for dup_id in duplicate_ids]
+                [group_prompt_ids[dup_id] for dup_id in cluster_member_ids]
             )
             kept_items.append(
                 _seed_resolved_item(
@@ -865,8 +937,8 @@ def _apply_dedupe_response(
                 )
             )
             used_ids.add(keep_id)
-            used_ids.update(duplicate_ids)
-            skipped_items += len(duplicate_ids)
+            used_ids.update(cluster_member_ids)
+            skipped_items += len(cluster_member_ids)
 
         for prompt_id, item in group_prompt_ids.items():
             if prompt_id in used_ids:
@@ -878,7 +950,7 @@ def _apply_dedupe_response(
 
 def _apply_enrichment_response(
     state: DigestState,
-    items: list[dict[str, Any]],
+    items: list[ResolvedItem],
     response_payload: dict[str, Any],
     *,
     skipped_items: int,
@@ -903,7 +975,7 @@ def _apply_enrichment_response(
         for item in items
         if str(item.get("_prompt_id", "")).strip()
     }
-    enriched_items: list[dict[str, Any]] = []
+    enriched_items: list[ResolvedItem] = []
     seen_ids: set[str] = set()
 
     for response_item in response_items:
@@ -937,17 +1009,20 @@ def _apply_enrichment_response(
 
     state["executive_summary"] = executive_summary
     state["top_stories"] = top_story_ids
-    return _finalize_items(
+    return cast(DigestState, _finalize_items(
         state,
         enriched_items,
         skipped_items + len(off_topic_ids),
         log_label=log_label,
-    )
+        logger=logger,
+        paper_limit=PAPER_LIMIT,
+        company_news_limit=COMPANY_NEWS_LIMIT,
+    ))
 
 
 def _apply_structured_response(
     state: DigestState,
-    groups: list[list[dict[str, Any]]],
+    groups: list[list[CollectedItem]],
     response_payload: dict[str, Any],
     *,
     log_label: str,
@@ -978,8 +1053,9 @@ def _apply_structured_response(
             "off_topic_ids": [str(item_id).strip() for item_id in off_topic_ids],
         }
 
-    kept_items: list[dict[str, Any]] = []
+    kept_items: list[ResolvedItem] = []
     skipped_items = 0
+    top_story_aliases: dict[str, str] = {}
 
     for group_index, group in enumerate(groups, start=1):
         group_id = f"g{group_index}"
@@ -998,8 +1074,8 @@ def _apply_structured_response(
         skipped_items += len(off_topic_ids)
 
         for cluster in group_clusters:
-            keep_id = str(cluster.get("keep_id", "")).strip()
-            if keep_id not in group_prompt_ids or keep_id in used_ids:
+            requested_keep_id = str(cluster.get("keep_id", "")).strip()
+            if requested_keep_id not in group_prompt_ids or requested_keep_id in used_ids:
                 continue
 
             duplicate_ids: list[str] = []
@@ -1007,15 +1083,27 @@ def _apply_structured_response(
                 duplicate_id = str(raw_duplicate_id).strip()
                 if (
                     duplicate_id
-                    and duplicate_id != keep_id
+                    and duplicate_id != requested_keep_id
                     and duplicate_id in group_prompt_ids
                     and duplicate_id not in used_ids
                 ):
                     duplicate_ids.append(duplicate_id)
 
-            keep_item = group_prompt_ids[keep_id]
+            keep_id = _promote_renderable_keep_id(
+                group_prompt_ids,
+                requested_keep_id,
+                duplicate_ids,
+            )
+            if keep_id != requested_keep_id:
+                top_story_aliases[requested_keep_id] = keep_id
+            keep_item = cast(ResolvedItem, group_prompt_ids[keep_id])
+            cluster_member_ids = [
+                prompt_id
+                for prompt_id in [requested_keep_id, *duplicate_ids]
+                if prompt_id != keep_id
+            ]
             duplicate_items = _sort_items_by_source_role(
-                [group_prompt_ids[dup_id] for dup_id in duplicate_ids]
+                [group_prompt_ids[dup_id] for dup_id in cluster_member_ids]
             )
             keep_item["category"] = _validate_category(cluster.get("category"), keep_item)
             keep_item["title"] = _clean_short_title(
@@ -1039,28 +1127,32 @@ def _apply_structured_response(
 
             kept_items.append(keep_item)
             used_ids.add(keep_id)
-            used_ids.update(duplicate_ids)
-            skipped_items += len(duplicate_ids)
+            used_ids.update(cluster_member_ids)
+            skipped_items += len(cluster_member_ids)
 
         for prompt_id, item in group_prompt_ids.items():
             if prompt_id in used_ids:
                 continue
-            item["title"] = _title_for_matching(item)
-            item["category"] = _keyword_categorize(_title_for_matching(item))
-            item["_prompt_id"] = prompt_id
-            item["summary_line"] = _fallback_summary_line(item)
-            item["tier"] = "normal"
-            item["coverage_sources"] = []
-            kept_items.append(item)
+            resolved_item = cast(ResolvedItem, item)
+            resolved_item["title"] = _title_for_matching(item)
+            resolved_item["category"] = _keyword_categorize(_title_for_matching(item))
+            resolved_item["_prompt_id"] = prompt_id
+            resolved_item["summary_line"] = _fallback_summary_line(item)
+            resolved_item["tier"] = "normal"
+            resolved_item["coverage_sources"] = []
+            kept_items.append(resolved_item)
 
     state["executive_summary"] = executive_summary
-    state["top_stories"] = top_story_ids
-    return _finalize_items(
+    state["top_stories"] = [top_story_aliases.get(story_id, story_id) for story_id in top_story_ids]
+    return cast(DigestState, _finalize_items(
         state,
         kept_items,
         skipped_items,
         log_label=log_label,
-    )
+        logger=logger,
+        paper_limit=PAPER_LIMIT,
+        company_news_limit=COMPANY_NEWS_LIMIT,
+    ))
 
 
 def node_collect(state: DigestState) -> DigestState:
@@ -1073,7 +1165,7 @@ def node_collect(state: DigestState) -> DigestState:
 def export_candidate_snapshot(output_path: Path) -> dict[str, Any]:
     state = node_collect({})
     state = node_filter(state)
-    snapshot_payload = build_candidate_snapshot(state.get("items", []))
+    snapshot_payload = build_candidate_snapshot(cast(list[CollectedItem], state.get("items", [])))
     output_path.write_text(
         json.dumps(snapshot_payload, indent=2) + "\n",
         encoding="utf-8",
@@ -1104,7 +1196,7 @@ def apply_decisions_file(
 
 
 def node_filter(state: DigestState) -> DigestState:
-    items = deduplicate(state.get("items", []))
+    items = deduplicate(cast(list[CollectedItem], state.get("items", [])))
     logger.info("After URL deduplication: %d items", len(items))
 
     items, skipped_noise = exclude_noise(items)
@@ -1125,7 +1217,7 @@ def node_filter(state: DigestState) -> DigestState:
 
 
 def node_categorize(state: DigestState) -> DigestState:
-    items = state.get("items", [])
+    items = cast(list[CollectedItem], state.get("items", []))
     if not items:
         logger.warning("No items to categorize")
         return state
@@ -1154,15 +1246,22 @@ def node_categorize(state: DigestState) -> DigestState:
         logger.warning(
             "No valid OPENAI_API_KEY found, using local duplicate resolution"
         )
-        resolved_items, skipped_items = _fallback_resolve_groups(groups)
+        fallback_groups = _build_fallback_candidate_groups(items)
+        resolved_items, skipped_items = _fallback_resolve_groups(
+            fallback_groups,
+            duplicate_matcher=_is_fallback_candidate_duplicate_data,
+        )
         state["executive_summary"] = ""
         state["top_stories"] = []
-        return _finalize_items(
+        return cast(DigestState, _finalize_items(
             state,
             resolved_items,
             skipped_items,
             log_label="After categorization",
-        )
+            logger=logger,
+            paper_limit=PAPER_LIMIT,
+            company_news_limit=COMPANY_NEWS_LIMIT,
+        ))
 
     try:
         client = _get_openai_client(api_key)
@@ -1180,7 +1279,7 @@ Each group contains possible near-duplicates. Only compare items within the same
 
 Rules:
 - If multiple items cover the same event, keep the most informative one.
-- Input items include source_role. When stories are otherwise equivalent, prefer keep_id using this order: primary, independent_reporting, commentary, community.
+- Input items include source_role and feed_mode. When stories are otherwise equivalent, prefer keep_id using this order: core over discovery_only, then primary, independent_reporting, commentary, community.
 - Preserve distinct stories from the same company.
 - Use the title and summary to decide duplicates.
 - If items in a group are distinct, return separate clusters for them.
@@ -1222,12 +1321,14 @@ Each item is already deduplicated.
 
 Rules:
 - Mark clearly off-topic items for a biotech/pharma industry digest as off-topic.
+- Treat these as off-topic or low-signal unless they contain a concrete material event: roundup posts, newsletter bundles, people-move items, broad trend explainers, and generic market chatter.
 - For each remaining item, assign exactly one category from this list:
 {categories_str}
 - For each item, provide a short_title of {_SHORT_TITLE_MAX_WORDS} words or fewer.
 - For each item, provide a summary_line: one plain-English sentence explaining why a general reader should care about this story.
 - For each item, assign a tier: "high" if the story has broad impact, strong novelty, solid evidence, or high practical relevance; otherwise "normal".
-- Use source_role and coverage_count as signals for authority and importance.
+- Use source_role, feed_mode, and coverage_count as signals for authority and importance.
+- Discovery-only items are supporting signals. Do not prioritize them over core items in top_stories when a core item covers the same event.
 - Write an executive_summary: 2-3 sentences capturing the day's most important biotech/pharma themes.
 - Pick up to 3 most significant item_ids as top_stories, drawn from high-tier items when possible.
 
@@ -1266,19 +1367,26 @@ Input JSON:
             "Categorization error: %s. Falling back to local duplicate resolution.",
             exc,
         )
-        resolved_items, skipped_items = _fallback_resolve_groups(groups)
+        fallback_groups = _build_fallback_candidate_groups(items)
+        resolved_items, skipped_items = _fallback_resolve_groups(
+            fallback_groups,
+            duplicate_matcher=_is_fallback_candidate_duplicate_data,
+        )
         state["executive_summary"] = ""
         state["top_stories"] = []
-        return _finalize_items(
+        return cast(DigestState, _finalize_items(
             state,
             resolved_items,
             skipped_items,
             log_label="After local categorization",
-        )
+            logger=logger,
+            paper_limit=PAPER_LIMIT,
+            company_news_limit=COMPANY_NEWS_LIMIT,
+        ))
 
 
 def node_render(state: DigestState) -> DigestState:
-    items = state.get("items", [])
+    items = cast(list[ResolvedItem], state.get("items", []))
     logger.info("Rendering %d items", len(items))
     markdown = to_markdown(
         items,

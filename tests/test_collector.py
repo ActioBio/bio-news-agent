@@ -95,6 +95,7 @@ def test_collect_items_keeps_entries_when_bozo(monkeypatch):
     assert items[0]["summary"] == "Valid summary"
     assert items[0]["source_type"] == "paper"
     assert items[0]["source_role"] == "independent_reporting"
+    assert items[0]["feed_mode"] == "core"
 
 
 def test_load_feeds_defaults_missing_source(tmp_path, monkeypatch):
@@ -107,6 +108,7 @@ def test_load_feeds_defaults_missing_source(tmp_path, monkeypatch):
     assert feeds["https://example.com/rss"]["source"] == "example.com"
     assert feeds["https://example.com/rss"]["type"] == "news"
     assert feeds["https://example.com/rss"]["source_role"] == "independent_reporting"
+    assert feeds["https://example.com/rss"]["feed_mode"] == "core"
 
 
 def test_load_feeds_preserves_source_role(tmp_path, monkeypatch):
@@ -120,6 +122,19 @@ def test_load_feeds_preserves_source_role(tmp_path, monkeypatch):
     feeds = collector._load_feeds()
 
     assert feeds["https://example.com/rss"]["source_role"] == "primary"
+
+
+def test_load_feeds_preserves_feed_mode(tmp_path, monkeypatch):
+    feeds_path = tmp_path / "feeds.json"
+    feeds_path.write_text(
+        '{"https://example.com/rss":{"category":"All","source":"Example","feed_mode":"discovery_only"}}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(collector, "_FEEDS_FILE", feeds_path)
+    feeds = collector._load_feeds()
+
+    assert feeds["https://example.com/rss"]["feed_mode"] == "discovery_only"
 
 
 def test_collect_items_skips_failed_feeds(monkeypatch):
@@ -167,3 +182,4 @@ def test_collect_items_skips_failed_feeds(monkeypatch):
     assert len(items) == 1
     assert items[0]["source"] == "Good Feed"
     assert items[0]["source_role"] == "independent_reporting"
+    assert items[0]["feed_mode"] == "core"

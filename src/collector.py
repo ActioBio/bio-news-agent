@@ -29,6 +29,7 @@ try:
         RSS_TIMEOUT,
         RSS_USER_AGENT,
     )
+    from item_types import CollectedItem, FeedMode, SourceRole
 except ModuleNotFoundError:  # pragma: no cover - module execution fallback
     from .config import (
         RSS_MAX_FEED_BYTES,
@@ -37,6 +38,7 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
         RSS_TIMEOUT,
         RSS_USER_AGENT,
     )
+    from .item_types import CollectedItem, FeedMode, SourceRole
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,7 @@ _FEEDS_FILE = Path(__file__).resolve().parent.parent / "feeds.json"
 _VALID_SOURCE_ROLES = frozenset(
     {"primary", "independent_reporting", "commentary", "community"}
 )
+_VALID_FEED_MODES = frozenset({"core", "discovery_only"})
 _TRACKING_PARAMS = frozenset(
     [
         "utm_source",
@@ -62,11 +65,18 @@ _TRACKING_PARAMS = frozenset(
 )
 
 
-def _normalize_source_role(value: Any) -> str:
+def _normalize_source_role(value: Any) -> SourceRole:
     source_role = str(value).strip().lower()
     if source_role in _VALID_SOURCE_ROLES:
         return source_role
     return "independent_reporting"
+
+
+def _normalize_feed_mode(value: Any) -> FeedMode:
+    feed_mode = str(value).strip().lower()
+    if feed_mode in _VALID_FEED_MODES:
+        return feed_mode
+    return "core"
 
 
 def _load_feeds() -> dict[str, dict[str, str]]:
@@ -100,12 +110,14 @@ def _load_feeds() -> dict[str, dict[str, str]]:
 
         source_type = str(raw_meta.get("type", "news")).strip().lower() or "news"
         source_role = _normalize_source_role(raw_meta.get("source_role"))
+        feed_mode = _normalize_feed_mode(raw_meta.get("feed_mode"))
 
         validated[raw_url] = {
             "source": source,
             "category": category,
             "type": source_type,
             "source_role": source_role,
+            "feed_mode": feed_mode,
         }
 
     logger.info("Loaded %d valid feeds from feeds.json", len(validated))
@@ -192,17 +204,18 @@ def _fetch_with_retry(url: str) -> feedparser.FeedParserDict:
 def _fetch_feed_entries(
     url: str,
     meta: dict[str, str],
-) -> tuple[str, str, str, str, list[dict[str, Any]]]:
+) -> tuple[str, str, str, SourceRole, FeedMode, list[dict[str, Any]]]:
     category = meta.get("category", "All")
     source = meta.get("source", urlparse(url).netloc or "Unknown Source")
     source_type = meta.get("type", "news")
     source_role = meta.get("source_role", "independent_reporting")
+    feed_mode = meta.get("feed_mode", "core")
     try:
         logger.info("Fetching %s...", source)
         parsed = _fetch_with_retry(url)
     except Exception as exc:
         logger.warning("Feed error for %s: %s", url, exc)
-        return source, category, source_type, source_role, []
+        return source, category, source_type, source_role, feed_mode, []
 
     if parsed.bozo:
         logger.warning(
@@ -213,16 +226,16 @@ def _fetch_feed_entries(
 
     entries = list(parsed.entries) if hasattr(parsed, "entries") else []
     logger.info("Found %d entries from %s", len(entries), source)
-    return source, category, source_type, source_role, entries
+    return source, category, source_type, source_role, feed_mode, entries
 
 
-def collect_items() -> list[dict[str, Any]]:
+def collect_items() -> list[CollectedItem]:
     """Return list[dict] fresh within 24 h."""
     cutoff = _now() - _DAY
     logger.info("Collecting items newer than %s", cutoff)
-    items: list[dict[str, Any]] = []
+    items: list[CollectedItem] = []
     feeds = _load_feeds()
-    feed_results: list[tuple[str, str, str, str, list[dict[str, Any]]]] = []
+    feed_results: list[tuple[str, str, str, SourceRole, FeedMode, list[dict[str, Any]]]] = []
 
     max_workers = max(1, min(RSS_MAX_WORKERS, len(feeds)))
     if max_workers == 1:
@@ -237,7 +250,7 @@ def collect_items() -> list[dict[str, Any]]:
             for future in as_completed(futures):
                 feed_results.append(future.result())
 
-    for source, category, source_type, source_role, entries in feed_results:
+    for source, category, source_type, source_role, feed_mode, entries in feed_results:
         for entry in entries:
             published = _parse_date(entry)
             if not published or published < cutoff:
@@ -262,6 +275,7 @@ def collect_items() -> list[dict[str, Any]]:
                     "summary": summary,
                     "source_type": source_type,
                     "source_role": source_role,
+                    "feed_mode": feed_mode,
                 }
             )
 

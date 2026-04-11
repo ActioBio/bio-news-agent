@@ -29,6 +29,10 @@ def _load_fixture(name: str) -> dict[str, object]:
     return json.loads((_FIXTURES_DIR / name).read_text(encoding="utf-8"))
 
 
+def _load_text_fixture(name: str) -> str:
+    return (_FIXTURES_DIR / name).read_text(encoding="utf-8")
+
+
 def _item(
     item_id: str,
     title: str,
@@ -39,6 +43,7 @@ def _item(
     category: str = "All",
     source_type: str = "news",
     source_role: str = "independent_reporting",
+    feed_mode: str = "core",
 ) -> dict[str, object]:
     return {
         "id": item_id,
@@ -51,6 +56,7 @@ def _item(
         "summary": summary,
         "source_type": source_type,
         "source_role": source_role,
+        "feed_mode": feed_mode,
     }
 
 
@@ -138,6 +144,43 @@ def test_build_candidate_groups_prefers_primary_source_within_group():
     assert [item["id"] for item in groups[0]] == ["a", "b"]
 
 
+def test_build_candidate_groups_can_leave_repeated_event_reports_as_singletons():
+    items = [
+        _item(
+            "a",
+            "Replimune’s advanced melanoma drug rebuffed by FDA for second time",
+            12,
+            source="BioSpace FDA",
+            summary="The FDA in a complete response letter maintained its original objection.",
+        ),
+        _item(
+            "b",
+            "FDA rejects Replimune cancer therapy, saying company didn't resolve trial doubts",
+            11,
+            source="Endpoints News",
+            summary="The agency once again rejected Replimune's oncolytic virus therapy for advanced melanoma.",
+        ),
+        _item(
+            "c",
+            "FDA again spurns Replimune melanoma drug",
+            10,
+            source="BioPharma Dive",
+            summary="Replimune failed to address the agency's issues with the drug's study results.",
+        ),
+        _item(
+            "d",
+            "Replimune skin cancer drug rejected again",
+            9,
+            source="STAT Biotech",
+            summary="A cancer drug candidate that became a flashpoint at FDA fails on a second try.",
+        ),
+    ]
+
+    groups = _build_candidate_groups(items)
+
+    assert [len(group) for group in groups] == [1, 1, 1, 1]
+
+
 def test_build_candidate_snapshot_preserves_group_ids():
     items = [
         _item(
@@ -190,6 +233,7 @@ def test_build_candidate_snapshot_matches_contract_fixture():
             10,
             source="Lifestyle Weekly",
             source_role="commentary",
+            feed_mode="discovery_only",
         ),
     ]
 
@@ -210,6 +254,224 @@ def test_node_filter_removes_noise_titles_before_source_cap(monkeypatch):
     result = node_filter({"items": items})
 
     assert [item["id"] for item in result["items"]] == ["a"]
+
+
+def test_node_categorize_drops_discovery_only_singletons(monkeypatch):
+    items = [
+        _item(
+            "a",
+            "FDA issues new safety update for oncology therapy",
+            12,
+            source="FDA",
+            source_role="primary",
+        ),
+        _item(
+            "b",
+            "Consider the Selfish Ribosome",
+            11,
+            source="Derek Lowe",
+            source_role="commentary",
+            feed_mode="discovery_only",
+        ),
+    ]
+
+    monkeypatch.setattr(graph, "_get_openai_api_key", lambda: "")
+    result = node_categorize({"items": items})
+
+    assert [item["id"] for item in result["items"]] == ["a"]
+
+
+def test_node_categorize_keeps_core_item_when_discovery_duplicate_exists(monkeypatch):
+    items = [
+        _item(
+            "a",
+            "Pfizer announces phase 3 oncology trial results",
+            12,
+            source="Pfizer",
+            summary="Official release for the phase 3 oncology study",
+            source_role="primary",
+        ),
+        _item(
+            "b",
+            "Pfizer announces phase 3 oncology trial results",
+            11,
+            source="Derek Lowe",
+            summary="Commentary on the same phase 3 oncology result",
+            source_role="commentary",
+            feed_mode="discovery_only",
+        ),
+    ]
+
+    monkeypatch.setattr(graph, "_get_openai_api_key", lambda: "")
+    result = node_categorize({"items": items})
+
+    assert len(result["items"]) == 1
+    assert result["items"][0]["source"] == "Pfizer"
+    assert result["items"][0]["coverage_sources"] == ["Derek Lowe"]
+
+
+def test_apply_dedupe_response_promotes_core_item_over_discovery_keep():
+    indexed_groups = [(
+        1,
+        [
+            _item(
+                "a",
+                "Pfizer announces phase 3 oncology trial results",
+                12,
+                source="Pfizer",
+                source_role="primary",
+            ),
+            _item(
+                "b",
+                "Pfizer announces phase 3 oncology trial results",
+                11,
+                source="Derek Lowe",
+                source_role="commentary",
+                feed_mode="discovery_only",
+            ),
+        ],
+    )]
+    response = {
+        "groups": [
+            {
+                "group_id": "g1",
+                "clusters": [
+                    {
+                        "keep_id": "g1i2",
+                        "duplicate_ids": ["g1i1"],
+                    }
+                ],
+            }
+        ]
+    }
+
+    items, skipped = graph._apply_dedupe_response(indexed_groups, response)
+
+    assert skipped == 1
+    assert len(items) == 1
+    assert items[0]["source"] == "Pfizer"
+    assert items[0]["feed_mode"] == "core"
+    assert items[0]["_prompt_id"] == "g1i1"
+    assert items[0]["coverage_sources"] == ["Derek Lowe"]
+
+
+def test_node_categorize_caps_company_news_items(monkeypatch):
+    items = [
+        _item(
+            "a",
+            "Pfizer appoints new oncology chief",
+            9,
+            source="Pfizer",
+            source_role="primary",
+        ),
+        _item(
+            "b",
+            "Moderna opens new manufacturing site",
+            12,
+            source="Endpoints News",
+            source_role="independent_reporting",
+        ),
+        _item(
+            "c",
+            "Biogen outlines turnaround memo",
+            13,
+            source="Newsletter",
+            source_role="commentary",
+        ),
+        _item(
+            "d",
+            "Amgen expands Singapore operations",
+            10,
+            source="STAT Biotech",
+            source_role="independent_reporting",
+        ),
+        _item(
+            "e",
+            "FDA issues new RSV safety update",
+            11,
+            source="FDA",
+            source_role="primary",
+        ),
+    ]
+
+    monkeypatch.setattr(graph, "COMPANY_NEWS_LIMIT", 2)
+    monkeypatch.setattr(graph, "_get_openai_api_key", lambda: "")
+
+    result = node_categorize({"items": items})
+
+    company_news_titles = {
+        item["title"] for item in result["items"] if item["category"] == "Company News"
+    }
+    assert company_news_titles == {
+        "Pfizer appoints new oncology chief",
+        "Moderna opens new manufacturing site",
+    }
+    assert "FDA issues new RSV safety update" in {
+        item["title"] for item in result["items"]
+    }
+
+
+def test_no_key_full_pipeline_matches_golden_fixture(tmp_path, monkeypatch):
+    output_file = tmp_path / "news.md"
+    items = [
+        _item(
+            "a",
+            "FDA approves first therapy for rare disease",
+            12,
+            source="FDA",
+            source_role="primary",
+            summary="Regulators cleared the therapy after a pivotal review.",
+        ),
+        _item(
+            "b",
+            "FDA approves first therapy for rare disease",
+            11,
+            source="Endpoints News",
+            source_role="independent_reporting",
+            summary="Independent reporting on the same approval.",
+        ),
+        _item(
+            "c",
+            "Biotech raises $200 million for obesity drug",
+            10,
+            source="BioPharma Dive",
+            source_role="independent_reporting",
+            summary="Funding round gives the company runway for late-stage trials.",
+        ),
+        _item(
+            "d",
+            "Biotech raises $200 million for obesity drug",
+            9,
+            source="Derek Lowe",
+            source_role="commentary",
+            feed_mode="discovery_only",
+            summary="Commentary on the same financing.",
+        ),
+        _item(
+            "e",
+            "Pfizer appoints new oncology chief",
+            8,
+            source="Endpoints News",
+            source_role="independent_reporting",
+        ),
+        _item(
+            "f",
+            "Congress presses FDA on drug shortages policy",
+            7,
+            source="STAT Pharma",
+            source_role="independent_reporting",
+        ),
+    ]
+
+    monkeypatch.setattr(graph, "collect_items", lambda: items)
+    monkeypatch.setattr(graph, "_get_openai_api_key", lambda: "")
+    monkeypatch.setattr(graph, "_NEWS_FILE", output_file)
+
+    result = build_graph().invoke({})
+
+    expected_markdown = _load_text_fixture("no_key_digest.md")
+    assert result["markdown"] == expected_markdown
+    assert output_file.read_text(encoding="utf-8") == expected_markdown
 
 
 def test_node_categorize_uses_structured_llm_response(monkeypatch):
@@ -470,6 +732,104 @@ def test_node_categorize_timeout_uses_local_resolution(monkeypatch):
     assert result["items"][0]["title"] == "Pfizer announces phase 3 oncology trial results"
 
 
+def test_node_categorize_timeout_fallback_merges_repeated_event_singletons(monkeypatch):
+    items = [
+        _item(
+            "a",
+            "Replimune’s advanced melanoma drug rebuffed by FDA for second time",
+            12,
+            source="BioSpace FDA",
+            summary="The FDA in a complete response letter maintained its original objection.",
+        ),
+        _item(
+            "b",
+            "FDA rejects Replimune cancer therapy, saying company didn't resolve trial doubts",
+            11,
+            source="Endpoints News",
+            summary="The agency once again rejected Replimune's oncolytic virus therapy for advanced melanoma.",
+        ),
+        _item(
+            "c",
+            "FDA again spurns Replimune melanoma drug",
+            10,
+            source="BioPharma Dive",
+            summary="Replimune failed to address the agency's issues with the drug's study results.",
+        ),
+        _item(
+            "d",
+            "Replimune skin cancer drug rejected again",
+            9,
+            source="STAT Biotech",
+            summary="A cancer drug candidate that became a flashpoint at FDA fails on a second try.",
+        ),
+    ]
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(graph, "_get_openai_client", lambda _api_key: object())
+
+    def raise_timeout(_client, _prompt):
+        raise APITimeoutError(
+            request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        )
+
+    monkeypatch.setattr(graph, "_chat_completion_text", raise_timeout)
+
+    result = node_categorize({"items": items})
+
+    assert len(result["items"]) == 1
+    assert result["items"][0]["coverage_sources"] == [
+        "Endpoints News",
+        "BioPharma Dive",
+        "STAT Biotech",
+    ]
+
+
+def test_node_categorize_timeout_fallback_keeps_distinct_same_company_fda_stories(monkeypatch):
+    items = [
+        _item(
+            "a",
+            "FDA rejects Acme cancer therapy after trial concerns",
+            12,
+            source="BioSpace FDA",
+            summary="The FDA rejected Acme's cancer therapy after trial concerns and requested additional analysis.",
+        ),
+        _item(
+            "b",
+            "FDA rejects Acme gene therapy, requests more safety data",
+            11,
+            source="Endpoints News",
+            summary="The FDA rejected Acme's gene therapy and asked for more safety data before any approval decision.",
+        ),
+        _item(
+            "c",
+            "FDA rejects Acme cancer therapy again after trial doubts",
+            10,
+            source="STAT Biotech",
+            summary="The agency again rejected Acme's cancer therapy after trial doubts remained unresolved.",
+        ),
+    ]
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(graph, "_get_openai_client", lambda _api_key: object())
+
+    def raise_timeout(_client, _prompt):
+        raise APITimeoutError(
+            request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        )
+
+    monkeypatch.setattr(graph, "_chat_completion_text", raise_timeout)
+
+    result = node_categorize({"items": items})
+
+    assert len(result["items"]) == 2
+    assert result["items"][0]["coverage_sources"] == ["STAT Biotech"]
+    assert result["items"][1]["coverage_sources"] == []
+    assert {item["title"] for item in result["items"]} == {
+        "FDA rejects Acme cancer therapy after trial concerns",
+        "FDA rejects Acme gene therapy, requests more safety data",
+    }
+
+
 def test_apply_decisions_file_renders_from_candidate_snapshot(tmp_path, monkeypatch):
     items = [
         _item(
@@ -603,7 +963,7 @@ def test_apply_decisions_backward_compat_old_format(tmp_path, monkeypatch):
     assert result["items"][0]["tier"] == "normal"
     assert result["items"][0]["coverage_sources"] == ["Endpoints News"]
     assert result.get("executive_summary") == ""
-    assert result.get("top_stories") == ["g1i1", "g2i1"]
+    assert result.get("top_stories") == ["g1i1"]
 
 
 def test_apply_structured_response_uses_duplicate_summary_when_keep_summary_is_blank():
@@ -689,6 +1049,53 @@ def test_apply_structured_response_orders_duplicate_fallbacks_by_source_role():
 
     assert result["items"][0]["summary_line"] == "Independent summary second."
     assert result["items"][0]["coverage_sources"] == ["Endpoints News", "Newsletter"]
+
+
+def test_apply_structured_response_promotes_core_item_over_discovery_keep():
+    state = {"items": [], "executive_summary": "", "top_stories": []}
+    groups = [[
+        _item(
+            "a",
+            "Pfizer announces phase 3 oncology trial results",
+            12,
+            source="Pfizer",
+            source_role="primary",
+        ),
+        _item(
+            "b",
+            "Pfizer announces phase 3 oncology trial results",
+            11,
+            source="Derek Lowe",
+            source_role="commentary",
+            feed_mode="discovery_only",
+        ),
+    ]]
+    response = {
+        "top_stories": ["g1i2"],
+        "groups": [
+            {
+                "group_id": "g1",
+                "off_topic_ids": [],
+                "clusters": [
+                    {
+                        "keep_id": "g1i2",
+                        "duplicate_ids": ["g1i1"],
+                        "category": "Clinical & Research",
+                        "short_title": "Pfizer posts oncology trial results",
+                    }
+                ],
+            }
+        ],
+    }
+
+    result = graph._apply_structured_response(state, groups, response, log_label="test")
+
+    assert len(result["items"]) == 1
+    assert result["items"][0]["source"] == "Pfizer"
+    assert result["items"][0]["feed_mode"] == "core"
+    assert result["items"][0]["_prompt_id"] == "g1i1"
+    assert result["items"][0]["coverage_sources"] == ["Derek Lowe"]
+    assert result["top_stories"] == ["g1i1"]
 
 
 def test_apply_enrichment_response_preserves_seeded_summary_line_when_model_omits_it():
