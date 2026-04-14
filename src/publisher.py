@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import gzip
 import json
 import os
 import subprocess
@@ -14,17 +16,21 @@ from urllib.request import Request, urlopen
 
 try:
     from config import (
+        DIGEST_ACTIONS_REF,
         DIGEST_ISSUE_LABEL,
         DIGEST_ISSUE_REPO,
         DIGEST_ISSUE_TITLE_PREFIX,
         DIGEST_OUTPUT_FILE,
+        DIGEST_PUBLISH_WORKFLOW,
     )
 except ModuleNotFoundError:  # pragma: no cover - module execution fallback
     from .config import (
+        DIGEST_ACTIONS_REF,
         DIGEST_ISSUE_LABEL,
         DIGEST_ISSUE_REPO,
         DIGEST_ISSUE_TITLE_PREFIX,
         DIGEST_OUTPUT_FILE,
+        DIGEST_PUBLISH_WORKFLOW,
     )
 
 _GITHUB_API_BASE = "https://api.github.com"
@@ -48,6 +54,12 @@ class PublishResult(TypedDict):
 class IssueStatusResult(TypedDict):
     exists: bool
     issue_number: int | None
+    title: str
+
+
+class DispatchResult(TypedDict):
+    workflow: str
+    ref: str
     title: str
 
 
@@ -87,6 +99,9 @@ def _get_repo_owner_name() -> tuple[str, str]:
 
 
 def _today_issue_title() -> str:
+    override = os.getenv("DIGEST_ISSUE_TITLE_OVERRIDE", "").strip()
+    if override:
+        return override
     today = datetime.now(timezone.utc).date().isoformat()
     return f"{DIGEST_ISSUE_TITLE_PREFIX} – {today}"
 
@@ -96,6 +111,11 @@ def _read_digest_body(news_file: Path) -> str:
     if len(body) > _MAX_ISSUE_BODY_CHARS:
         return body[:_MAX_ISSUE_BODY_CHARS] + "\n\n*(truncated)*"
     return body
+
+
+def _encode_dispatch_body(body: str) -> str:
+    compressed = gzip.compress(body.encode("utf-8"))
+    return base64.b64encode(compressed).decode("ascii")
 
 
 def _github_api_request(
@@ -264,4 +284,26 @@ def publish_issue(news_file: Path | None = None) -> PublishResult:
         "action": "created",
         "issue_number": int(created_issue["number"]),
         "title": issue_status["title"],
+    }
+
+
+def dispatch_publish_workflow(news_file: Path | None = None) -> DispatchResult:
+    issue_title = _today_issue_title()
+    digest_body = _read_digest_body(news_file or _NEWS_FILE)
+    owner, repo = _get_repo_owner_name()
+    _github_api_request(
+        "POST",
+        f"/repos/{owner}/{repo}/actions/workflows/{DIGEST_PUBLISH_WORKFLOW}/dispatches",
+        payload={
+            "ref": DIGEST_ACTIONS_REF,
+            "inputs": {
+                "issue_title": issue_title,
+                "issue_body_gz_b64": _encode_dispatch_body(digest_body),
+            },
+        },
+    )
+    return {
+        "workflow": DIGEST_PUBLISH_WORKFLOW,
+        "ref": DIGEST_ACTIONS_REF,
+        "title": issue_title,
     }

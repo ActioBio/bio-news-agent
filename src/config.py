@@ -41,6 +41,8 @@ DIGEST_ISSUE_TITLE_PREFIX: str = _get_env_str(
     "DIGEST_ISSUE_TITLE_PREFIX",
     "Biotech / Pharma Headlines",
 )
+DIGEST_PUBLISH_WORKFLOW: str = _get_env_str("DIGEST_PUBLISH_WORKFLOW", "publish-digest.yml")
+DIGEST_ACTIONS_REF: str = _get_env_str("DIGEST_ACTIONS_REF", "main")
 
 # ── Pipeline limits ──────────────────────────────────────────────
 PAPER_LIMIT: int = _get_env_int("PAPER_LIMIT", 7)

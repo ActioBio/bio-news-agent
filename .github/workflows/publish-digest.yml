@@ -1,0 +1,56 @@
+name: Publish Biotech Digest Issue
+
+permissions:
+  contents: read
+  issues: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_title:
+        description: Issue title to create or update
+        required: true
+        type: string
+      issue_body_gz_b64:
+        description: Gzip-compressed and base64-encoded markdown digest body
+        required: true
+        type: string
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: src
+      GITHUB_TOKEN: ${{ github.token }}
+      DIGEST_OUTPUT_FILE: news.md
+      DIGEST_ISSUE_TITLE_OVERRIDE: ${{ inputs.issue_title }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Write digest body
+        env:
+          ISSUE_BODY_GZ_B64: ${{ inputs.issue_body_gz_b64 }}
+        run: |
+          python - <<'PY'
+          import base64
+          import gzip
+          import os
+          from pathlib import Path
+
+          payload = os.environ["ISSUE_BODY_GZ_B64"]
+          body = gzip.decompress(base64.b64decode(payload)).decode("utf-8")
+          Path("news.md").write_text(body, encoding="utf-8")
+          PY
+
+      - name: Create or update issue
+        run: uv run python src/main.py --publish-issue

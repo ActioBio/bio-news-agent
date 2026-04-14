@@ -9,11 +9,11 @@ from pathlib import Path
 try:
     from config import DIGEST_STATUS_FILE, LOG_LEVEL
     from graph import apply_decisions_file, build_graph, export_candidate_snapshot
-    from publisher import check_issue_status, publish_issue
+    from publisher import check_issue_status, dispatch_publish_workflow, publish_issue
 except ModuleNotFoundError:  # pragma: no cover - module execution fallback
     from .config import DIGEST_STATUS_FILE, LOG_LEVEL
     from .graph import apply_decisions_file, build_graph, export_candidate_snapshot
-    from .publisher import check_issue_status, publish_issue
+    from .publisher import check_issue_status, dispatch_publish_workflow, publish_issue
 
 
 _DEFAULT_CANDIDATES_FILE = Path("digest-candidates.json")
@@ -68,6 +68,11 @@ def parse_args() -> argparse.Namespace:
         "--publish-issue",
         action="store_true",
         help="Create or update today's GitHub issue from the rendered digest.",
+    )
+    mode_group.add_argument(
+        "--dispatch-publish",
+        action="store_true",
+        help="Trigger the publish-only GitHub Actions workflow for today's rendered digest.",
     )
     mode_group.add_argument(
         "--check-issue",
@@ -161,6 +166,18 @@ if __name__ == "__main__":
             "%s digest issue #%d (%s)",
             result["action"].capitalize(),
             result["issue_number"],
+            result["title"],
+        )
+    elif args.dispatch_publish:
+        try:
+            result = dispatch_publish_workflow()
+        except RuntimeError as exc:
+            logger.error("Publish workflow dispatch failed: %s", exc)
+            raise SystemExit(1) from exc
+        logger.info(
+            "Dispatched publish workflow %s on %s for %s",
+            result["workflow"],
+            result["ref"],
             result["title"],
         )
     elif args.check_issue:
