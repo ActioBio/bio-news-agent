@@ -98,6 +98,78 @@ def test_collect_items_keeps_entries_when_bozo(monkeypatch):
     assert items[0]["feed_mode"] == "core"
 
 
+def test_collect_items_with_stats_counts_bozo_empty_feed_as_failed(monkeypatch):
+    class Parsed:
+        bozo = True
+        bozo_exception = Exception("malformed feed")
+        entries: list[dict[str, str]] = []
+
+    monkeypatch.setattr(
+        collector,
+        "_load_feeds",
+        lambda: {
+            "https://feed.example.com/rss": {
+                "source": "Example Feed",
+                "category": "All",
+                "type": "news",
+            }
+        },
+    )
+    monkeypatch.setattr(collector, "_fetch_with_retry", lambda _url: Parsed())
+    monkeypatch.setattr(
+        collector,
+        "_now",
+        lambda: datetime(2026, 2, 6, 13, 0, tzinfo=timezone.utc),
+    )
+
+    items, stats = collector.collect_items_with_stats()
+
+    assert items == []
+    assert stats == {
+        "feeds_total": 1,
+        "feeds_succeeded": 0,
+        "feeds_failed": 1,
+        "items_collected": 0,
+        "feed_errors": [{"source": "Example Feed", "error": "malformed feed with no usable entries"}],
+    }
+
+
+def test_collect_items_with_stats_counts_bozo_junk_entries_as_failed(monkeypatch):
+    class Parsed:
+        bozo = True
+        bozo_exception = Exception("malformed feed")
+        entries = [{"title": "broken item with no link or date"}]
+
+    monkeypatch.setattr(
+        collector,
+        "_load_feeds",
+        lambda: {
+            "https://feed.example.com/rss": {
+                "source": "Example Feed",
+                "category": "All",
+                "type": "news",
+            }
+        },
+    )
+    monkeypatch.setattr(collector, "_fetch_with_retry", lambda _url: Parsed())
+    monkeypatch.setattr(
+        collector,
+        "_now",
+        lambda: datetime(2026, 2, 6, 13, 0, tzinfo=timezone.utc),
+    )
+
+    items, stats = collector.collect_items_with_stats()
+
+    assert items == []
+    assert stats == {
+        "feeds_total": 1,
+        "feeds_succeeded": 0,
+        "feeds_failed": 1,
+        "items_collected": 0,
+        "feed_errors": [{"source": "Example Feed", "error": "malformed feed with no usable entries"}],
+    }
+
+
 def test_load_feeds_defaults_missing_source(tmp_path, monkeypatch):
     feeds_path = tmp_path / "feeds.json"
     feeds_path.write_text('{"https://example.com/rss":{"category":"All"}}', encoding="utf-8")
@@ -183,3 +255,55 @@ def test_collect_items_skips_failed_feeds(monkeypatch):
     assert items[0]["source"] == "Good Feed"
     assert items[0]["source_role"] == "independent_reporting"
     assert items[0]["feed_mode"] == "core"
+
+
+def test_collect_items_with_stats_tracks_feed_health(monkeypatch):
+    class Parsed:
+        bozo = False
+        entries = [
+            {
+                "published_parsed": (2026, 2, 6, 12, 0, 0, 0, 0, 0),
+                "title": "Healthy story",
+                "link": "https://example.com/healthy",
+            }
+        ]
+
+    monkeypatch.setattr(
+        collector,
+        "_load_feeds",
+        lambda: {
+            "https://bad.example.com/rss": {
+                "source": "Bad Feed",
+                "category": "All",
+                "type": "news",
+            },
+            "https://good.example.com/rss": {
+                "source": "Good Feed",
+                "category": "All",
+                "type": "news",
+            },
+        },
+    )
+
+    def fake_fetch(url: str):
+        if "bad.example.com" in url:
+            raise URLError("feed down")
+        return Parsed()
+
+    monkeypatch.setattr(collector, "_fetch_with_retry", fake_fetch)
+    monkeypatch.setattr(
+        collector,
+        "_now",
+        lambda: datetime(2026, 2, 6, 13, 0, tzinfo=timezone.utc),
+    )
+
+    items, stats = collector.collect_items_with_stats()
+
+    assert len(items) == 1
+    assert stats == {
+        "feeds_total": 2,
+        "feeds_succeeded": 1,
+        "feeds_failed": 1,
+        "items_collected": 1,
+        "feed_errors": [{"source": "Bad Feed", "error": "<urlopen error feed down>"}],
+    }

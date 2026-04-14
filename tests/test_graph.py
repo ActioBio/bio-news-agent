@@ -14,6 +14,7 @@ from graph import (
     apply_decisions_file,
     build_graph,
     build_candidate_snapshot,
+    export_candidate_snapshot,
     node_categorize,
     node_filter,
     node_render,
@@ -242,6 +243,114 @@ def test_build_candidate_snapshot_matches_contract_fixture():
     assert snapshot == _load_fixture("candidate_snapshot.json")
 
 
+def test_export_candidate_snapshot_reports_feed_health(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        graph,
+        "collect_items_with_stats",
+        lambda: (
+            [
+                _item("a", "Pfizer posts oncology trial update", 12, source="Endpoints News"),
+                _item("b", "Roche wins FDA approval in rare disease", 11, source="STAT Pharma"),
+            ],
+            {
+                "feeds_total": 2,
+                "feeds_succeeded": 2,
+                "feeds_failed": 0,
+                "items_collected": 2,
+            },
+        ),
+    )
+
+    snapshot_file = tmp_path / "digest-candidates.json"
+    snapshot_payload, status = export_candidate_snapshot(snapshot_file)
+
+    assert snapshot_file.exists()
+    assert len(snapshot_payload["groups"]) == 2
+    assert status == {
+        "ok": True,
+        "reason": "ok",
+        "groups": 2,
+        "items_collected": 2,
+        "items_filtered": 2,
+        "feeds_total": 2,
+        "feeds_succeeded": 2,
+        "feeds_failed": 0,
+        "feed_errors": [],
+    }
+
+
+def test_export_candidate_snapshot_marks_empty_snapshot_as_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        graph,
+        "collect_items_with_stats",
+        lambda: (
+            [],
+            {
+                "feeds_total": 3,
+                "feeds_succeeded": 0,
+                "feeds_failed": 3,
+                "items_collected": 0,
+            },
+        ),
+    )
+
+    snapshot_file = tmp_path / "digest-candidates.json"
+    snapshot_payload, status = export_candidate_snapshot(snapshot_file)
+
+    assert snapshot_payload["groups"] == []
+    assert status["ok"] is False
+    assert status["reason"] == "feed_fetch_failed"
+    assert status["feed_errors"] == []
+
+
+def test_export_candidate_snapshot_allows_healthy_empty_day(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        graph,
+        "collect_items_with_stats",
+        lambda: (
+            [],
+            {
+                "feeds_total": 5,
+                "feeds_succeeded": 5,
+                "feeds_failed": 0,
+                "items_collected": 0,
+            },
+        ),
+    )
+
+    snapshot_file = tmp_path / "digest-candidates.json"
+    snapshot_payload, status = export_candidate_snapshot(snapshot_file)
+
+    assert snapshot_payload["groups"] == []
+    assert status["ok"] is True
+    assert status["reason"] == "no_fresh_items"
+    assert status["feed_errors"] == []
+
+
+def test_export_candidate_snapshot_fails_when_no_feeds_are_configured(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        graph,
+        "collect_items_with_stats",
+        lambda: (
+            [],
+            {
+                "feeds_total": 0,
+                "feeds_succeeded": 0,
+                "feeds_failed": 0,
+                "items_collected": 0,
+            },
+        ),
+    )
+
+    snapshot_file = tmp_path / "digest-candidates.json"
+    snapshot_payload, status = export_candidate_snapshot(snapshot_file)
+
+    assert snapshot_payload["groups"] == []
+    assert status["ok"] is False
+    assert status["reason"] == "no_feeds_configured"
+    assert status["feed_errors"] == []
+
+
 def test_node_filter_removes_noise_titles_before_source_cap(monkeypatch):
     items = [
         _item("a", "Pfizer posts phase 3 readout", 12, source="Endpoints News"),
@@ -463,7 +572,19 @@ def test_no_key_full_pipeline_matches_golden_fixture(tmp_path, monkeypatch):
         ),
     ]
 
-    monkeypatch.setattr(graph, "collect_items", lambda: items)
+    monkeypatch.setattr(
+        graph,
+        "collect_items_with_stats",
+        lambda: (
+            items,
+            {
+                "feeds_total": 3,
+                "feeds_succeeded": 3,
+                "feeds_failed": 0,
+                "items_collected": len(items),
+            },
+        ),
+    )
     monkeypatch.setattr(graph, "_get_openai_api_key", lambda: "")
     monkeypatch.setattr(graph, "_NEWS_FILE", output_file)
 
@@ -1180,13 +1301,51 @@ def test_build_graph_renders_empty_digest_when_collection_is_empty(tmp_path, mon
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setattr(graph, "CONFIG_OPENAI_API_KEY", "")
     monkeypatch.setattr(graph, "_NEWS_FILE", output_file)
-    monkeypatch.setattr(graph, "collect_items", lambda: [])
+    monkeypatch.setattr(
+        graph,
+        "collect_items_with_stats",
+        lambda: (
+            [],
+            {
+                "feeds_total": 5,
+                "feeds_succeeded": 5,
+                "feeds_failed": 0,
+                "items_collected": 0,
+            },
+        ),
+    )
 
     result = build_graph().invoke({})
 
     assert result["items"] == []
     assert result["markdown"] == "_No fresh biotech/pharma headlines in the last 24 h._"
     assert output_file.read_text(encoding="utf-8") == result["markdown"]
+
+
+def test_build_graph_raises_when_collection_health_is_bad(tmp_path, monkeypatch):
+    output_file = tmp_path / "news.md"
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(graph, "CONFIG_OPENAI_API_KEY", "")
+    monkeypatch.setattr(graph, "_NEWS_FILE", output_file)
+    monkeypatch.setattr(
+        graph,
+        "collect_items_with_stats",
+        lambda: (
+            [],
+            {
+                "feeds_total": 5,
+                "feeds_succeeded": 0,
+                "feeds_failed": 5,
+                "items_collected": 0,
+            },
+        ),
+    )
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="Candidate export failed health checks: feed_fetch_failed"):
+        build_graph().invoke({})
 
 
 def test_node_render_writes_to_configured_output(tmp_path, monkeypatch):

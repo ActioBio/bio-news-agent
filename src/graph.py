@@ -28,7 +28,7 @@ from openai import (
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 try:
-    from collector import collect_items
+    from collector import CollectionStats, collect_items_with_stats
     from config import (
         CATEGORIES,
         COMPANY_NEWS_LIMIT,
@@ -54,7 +54,7 @@ try:
     )
     from renderer import to_markdown
 except ModuleNotFoundError:  # pragma: no cover - module execution fallback
-    from .collector import collect_items
+    from .collector import CollectionStats, collect_items_with_stats
     from .config import (
         CATEGORIES,
         COMPANY_NEWS_LIMIT,
@@ -187,6 +187,19 @@ class DigestState(TypedDict, total=False):
     markdown: str
     executive_summary: str
     top_stories: list[str]
+    collection_stats: CollectionStats
+
+
+class CandidateExportStatus(TypedDict):
+    ok: bool
+    reason: str
+    groups: int
+    items_collected: int
+    items_filtered: int
+    feeds_total: int
+    feeds_succeeded: int
+    feeds_failed: int
+    feed_errors: list[dict[str, str]]
 
 
 def _promote_renderable_keep_id(
@@ -1155,22 +1168,84 @@ def _apply_structured_response(
     ))
 
 
+def _filter_items(items: list[CollectedItem]) -> list[CollectedItem]:
+    items = deduplicate(items)
+    logger.info("After URL deduplication: %d items", len(items))
+
+    items, skipped_noise = exclude_noise(items)
+    if skipped_noise:
+        logger.info("Skipped %d noise titles", skipped_noise)
+
+    filtered_items, skipped_source_cap = _apply_source_cap(items)
+    if skipped_source_cap:
+        logger.info(
+            "Skipped %d items due to source cap (%d/source)",
+            skipped_source_cap,
+            MAX_ITEMS_PER_SOURCE,
+        )
+
+    logger.info("After filtering: %d items", len(filtered_items))
+    return filtered_items
+
+
+def _build_candidate_export_status(
+    collector_stats: CollectionStats,
+    *,
+    items_filtered: int,
+    groups: int,
+) -> CandidateExportStatus:
+    reason = "ok"
+    ok = True
+
+    if collector_stats["feeds_total"] == 0:
+        ok = False
+        reason = "no_feeds_configured"
+    elif collector_stats["feeds_succeeded"] == 0:
+        ok = False
+        reason = "feed_fetch_failed"
+    elif groups == 0 and collector_stats["feeds_failed"] > 0:
+        ok = False
+        reason = "empty_snapshot_with_feed_errors"
+    elif groups == 0:
+        reason = "no_fresh_items"
+
+    return {
+        "ok": ok,
+        "reason": reason,
+        "groups": groups,
+        "items_collected": collector_stats["items_collected"],
+        "items_filtered": items_filtered,
+        "feeds_total": collector_stats["feeds_total"],
+        "feeds_succeeded": collector_stats["feeds_succeeded"],
+        "feeds_failed": collector_stats["feeds_failed"],
+        "feed_errors": collector_stats.get("feed_errors", [])[:5],
+    }
+
+
 def node_collect(state: DigestState) -> DigestState:
-    items = collect_items()
+    items, collector_stats = collect_items_with_stats()
     logger.info("Collected %d items", len(items))
     state["items"] = items
+    state["collection_stats"] = collector_stats
     return state
 
 
-def export_candidate_snapshot(output_path: Path) -> dict[str, Any]:
-    state = node_collect({})
-    state = node_filter(state)
-    snapshot_payload = build_candidate_snapshot(cast(list[CollectedItem], state.get("items", [])))
+def export_candidate_snapshot(
+    output_path: Path,
+) -> tuple[dict[str, Any], CandidateExportStatus]:
+    items, collector_stats = collect_items_with_stats()
+    filtered_items = _filter_items(items)
+    snapshot_payload = build_candidate_snapshot(filtered_items)
+    status = _build_candidate_export_status(
+        collector_stats,
+        items_filtered=len(filtered_items),
+        groups=len(snapshot_payload.get("groups", [])),
+    )
     output_path.write_text(
         json.dumps(snapshot_payload, indent=2) + "\n",
         encoding="utf-8",
     )
-    return snapshot_payload
+    return snapshot_payload, status
 
 
 def apply_decisions_file(
@@ -1196,29 +1271,37 @@ def apply_decisions_file(
 
 
 def node_filter(state: DigestState) -> DigestState:
-    items = deduplicate(cast(list[CollectedItem], state.get("items", [])))
-    logger.info("After URL deduplication: %d items", len(items))
-
-    items, skipped_noise = exclude_noise(items)
-    if skipped_noise:
-        logger.info("Skipped %d noise titles", skipped_noise)
-
-    filtered_items, skipped_source_cap = _apply_source_cap(items)
-    if skipped_source_cap:
-        logger.info(
-            "Skipped %d items due to source cap (%d/source)",
-            skipped_source_cap,
-            MAX_ITEMS_PER_SOURCE,
-        )
-
-    logger.info("After filtering: %d items", len(filtered_items))
-    state["items"] = filtered_items
+    state["items"] = _filter_items(cast(list[CollectedItem], state.get("items", [])))
     return state
 
 
 def node_categorize(state: DigestState) -> DigestState:
     items = cast(list[CollectedItem], state.get("items", []))
     if not items:
+        collector_stats = cast(
+            CollectionStats,
+            state.get(
+                "collection_stats",
+                {
+                    "feeds_total": 0,
+                    "feeds_succeeded": 0,
+                    "feeds_failed": 0,
+                    "items_collected": 0,
+                },
+            ),
+        )
+        export_status = _build_candidate_export_status(
+            collector_stats,
+            items_filtered=0,
+            groups=0,
+        )
+        if not export_status["ok"]:
+            raise RuntimeError(
+                "Candidate export failed health checks: "
+                f"{export_status['reason']} "
+                f"(feeds_total={export_status['feeds_total']}, "
+                f"feeds_failed={export_status['feeds_failed']})"
+            )
         logger.warning("No items to categorize")
         return state
 

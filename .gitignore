@@ -33,6 +33,9 @@ htmlcov/
 /news.md
 /digest-candidates.json
 /digest-decisions.json
+/digest-run-status.json
+/digest-issue-status.json
+/.uv-cache/
 
 # ── OS cruft ─────────────────────────────────────────────────────
 .DS_Store

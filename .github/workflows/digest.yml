@@ -16,6 +16,7 @@ jobs:
       PYTHONPATH: src
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+      GITHUB_TOKEN: ${{ github.token }}
       DIGEST_OUTPUT_FILE: news.md
 
     steps:
@@ -73,42 +74,4 @@ jobs:
 
       - name: Create or update issue
         if: steps.preflight.outputs.should_skip != 'true'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const today = new Date().toISOString().slice(0,10);
-            const digestPath = process.env.DIGEST_OUTPUT_FILE || 'news.md';
-            let body  = fs.readFileSync(digestPath,'utf8');
-            if (body.length > 65000) {
-              body = body.slice(0, 65000) + '\n\n*(truncated)*';
-            }
-
-            // search for an open digest issue for today
-            const { data: issues } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo:  context.repo.repo,
-              state: 'open',
-              labels: 'ai-digest'
-            });
-
-            const existing = issues.find(i => i.title === `Biotech / Pharma Headlines – ${today}`);
-
-            if (existing) {
-              await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo:  context.repo.repo,
-                issue_number: existing.number,
-                body
-              });
-              core.info(`Updated existing issue #${existing.number}`);
-            } else {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo:  context.repo.repo,
-                title: `Biotech / Pharma Headlines – ${today}`,
-                body,
-                labels: ['ai-digest']
-              });
-              core.info("Created new issue for today's digest");
-            }
+        run: uv run python src/main.py --publish-issue

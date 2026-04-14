@@ -113,17 +113,21 @@ This path keeps feed collection and filtering in Python, but lets Codex or Claud
 For scheduled agent runs, prefer a local runner so the job can use your machine's network and GitHub auth; keep GitHub Actions as the later fallback.
 
 ```bash
+uv run python src/main.py --check-issue --issue-status-file digest-issue-status.json
 uv run python src/main.py --candidates-only
 # agent reads digest-candidates.json and writes digest-decisions.json
 uv run python src/main.py --apply-decisions digest-decisions.json
+uv run python src/main.py --publish-issue
 ```
 
-`--candidates-only` writes `digest-candidates.json` by default. Use `--candidates-file <path>` to override the snapshot path for either step.
+`--check-issue` writes `digest-issue-status.json` by default. `--candidates-only` writes `digest-candidates.json` and `digest-run-status.json` by default. Use `--candidates-file <path>`, `--status-file <path>`, and `--issue-status-file <path>` to override these artifacts.
 
 Runner setup:
 
-- Codex: check today's issue first, run `uv sync --locked`, run `uv run python src/main.py --candidates-only`, write `digest-decisions.json`, then run `uv run python src/main.py --apply-decisions digest-decisions.json`.
+- Codex: run `UV_CACHE_DIR=.uv-cache uv sync --locked`, run `uv run python src/main.py --check-issue --issue-status-file digest-issue-status.json`, stop if it reports `ok: true` and `exists: true`, stop if it reports `ok: false` and `retryable: false`, and continue only if it reports `ok: false` and `retryable: true`. Then run `RSS_MAX_WORKERS=2 RSS_TIMEOUT=15 uv run python src/main.py --candidates-only --status-file digest-run-status.json`, verify `digest-run-status.json` reports `ok: true`, and if it fails with `feed_fetch_failed` or `empty_snapshot_with_feed_errors`, retry candidate export once with lower RSS concurrency before giving up. Write `digest-decisions.json`, run `uv run python src/main.py --apply-decisions digest-decisions.json`, then run `uv run python src/main.py --publish-issue`.
 - Claude Code: use the same two-step flow and the same `digest-decisions.json` schema.
+
+Publishing prefers `GITHUB_TOKEN` or `GH_TOKEN` with issue write access, but the same repo-local commands also fall back to authenticated local `gh` CLI access. Placeholder token values are ignored, and auth-failing tokens fall back to `gh`.
 
 Agent decisions should use this JSON shape:
 
@@ -149,8 +153,6 @@ Agent decisions should use this JSON shape:
   ]
 }
 ```
-
-After `--apply-decisions`, the existing issue publishing step can post `news.md` as usual.
 
 The default digest output is compact and title-first. `executive_summary` and `summary_line` are optional enrichment fields; the renderer keeps top stories and category sections skimmable even when those fields are present.
 By default, `Company News` is capped to the top 3 ranked items to keep the daily digest quick to scan.
@@ -186,9 +188,13 @@ Pipeline notes:
 - Source-specific low-signal items such as webinars, sponsored posts, opinion pieces, people-move roundups, and bundled roundup headlines are dropped before grouping.
 - Mixed regulator and institutional feeds can also be gated by source-specific title or link rules before grouping.
 - The source cap is still applied before LLM dedupe for diversity and lower cost.
+- Candidate export also writes `digest-run-status.json` with feed health, group counts, and sample `feed_errors` for automation use.
+- `--check-issue` writes `digest-issue-status.json` through the same repo-local GitHub path used for publishing, preferring `GITHUB_TOKEN` / `GH_TOKEN` and falling back to local `gh` auth. On failure it still writes a status artifact with `ok: false`, a `reason`, an `error_kind`, and a `retryable` flag so automation can distinguish transient GitHub failures from hard auth/config errors.
+- `--candidates-only` exits nonzero only when feed health is bad enough to make the snapshot unreliable. Healthy empty days are reported as `reason: "no_fresh_items"` without failing.
 - Lower-priority `Company News` items are capped after ranking to keep fallback digests compact.
 - `discovery_only` feeds can still merge into a core story and contribute coverage context, but standalone discovery-only items are dropped before final render.
 - Placeholder OpenAI API keys from either the shell environment or `.env` are ignored for local runs.
 - LLM request timeouts retry before falling back to local duplicate resolution.
 - The LLM receives candidate groups and returns structured duplicate clusters instead of line-based `SKIP` output.
+- Issue publishing now goes through the repo-local `--publish-issue` command, which prefers `GITHUB_TOKEN` / `GH_TOKEN` and falls back to local `gh` auth.
 - Short display titles are generated only for kept items after duplicates are resolved.
