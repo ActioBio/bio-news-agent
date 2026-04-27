@@ -30,14 +30,47 @@ jobs:
           script: |
             const today = new Date().toISOString().slice(0,10);
             const title = `Biotech / Pharma Headlines – ${today}`;
-            const { data: issues } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: 'ai-digest'
-            });
+            const query = `
+              query($owner: String!, $repo: String!, $cursor: String) {
+                repository(owner: $owner, name: $repo) {
+                  issues(first: 100, after: $cursor, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC}) {
+                    nodes {
+                      number
+                      title
+                      labels(first: 20) {
+                        nodes {
+                          name
+                        }
+                      }
+                    }
+                    pageInfo {
+                      hasNextPage
+                      endCursor
+                    }
+                  }
+                }
+              }
+            `;
 
-            const existing = issues.find(issue => issue.title === title);
+            let existing = null;
+            let cursor = null;
+            let hasNextPage = true;
+
+            while (!existing && hasNextPage) {
+              const result = await github.graphql(query, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                cursor
+              });
+              const issues = result.repository.issues;
+              existing = issues.nodes.find(issue =>
+                issue.title === title &&
+                issue.labels.nodes.some(label => label.name === 'ai-digest')
+              );
+              cursor = issues.pageInfo.endCursor;
+              hasNextPage = issues.pageInfo.hasNextPage;
+            }
+
             const shouldSkip = existing ? 'true' : 'false';
 
             core.setOutput('should_skip', shouldSkip);

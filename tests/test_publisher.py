@@ -20,11 +20,20 @@ def test_publish_issue_updates_existing_issue(tmp_path, monkeypatch):
     )
 
     calls: list[tuple[str, str, object | None]] = []
+    monkeypatch.setattr(
+        publisher,
+        "_list_open_issues",
+        lambda owner, repo: [
+            {
+                "number": 12,
+                "title": "Biotech / Pharma Headlines – 2026-04-13",
+                "labels": [{"name": "ai-digest"}],
+            }
+        ],
+    )
 
     def fake_request(method: str, path: str, payload=None):
         calls.append((method, path, payload))
-        if method == "GET":
-            return [{"number": 12, "title": "Biotech / Pharma Headlines – 2026-04-13"}]
         if method == "PATCH":
             return {"number": 12}
         raise AssertionError(f"unexpected call: {method} {path}")
@@ -38,7 +47,13 @@ def test_publish_issue_updates_existing_issue(tmp_path, monkeypatch):
         "issue_number": 12,
         "title": "Biotech / Pharma Headlines – 2026-04-13",
     }
-    assert calls[1][0] == "PATCH"
+    assert calls == [
+        (
+            "PATCH",
+            "/repos/ActioBio/bio-news-agent/issues/12",
+            {"body": "hello world"},
+        )
+    ]
 
 
 def test_check_issue_status_finds_existing_issue(monkeypatch):
@@ -50,11 +65,76 @@ def test_check_issue_status_finds_existing_issue(monkeypatch):
         lambda: "Biotech / Pharma Headlines – 2026-04-13",
     )
 
-    def fake_request(method: str, path: str, payload=None):
-        assert method == "GET"
-        return [{"number": 12, "title": "Biotech / Pharma Headlines – 2026-04-13"}]
+    monkeypatch.setattr(
+        publisher,
+        "_list_open_issues",
+        lambda owner, repo: [
+            {
+                "number": 12,
+                "title": "Biotech / Pharma Headlines – 2026-04-13",
+                "labels": [{"name": "ai-digest"}],
+            }
+        ],
+    )
 
-    monkeypatch.setattr(publisher, "_github_api_request", fake_request)
+    result = publisher.check_issue_status()
+
+    assert result == {
+        "exists": True,
+        "issue_number": 12,
+        "title": "Biotech / Pharma Headlines – 2026-04-13",
+    }
+
+
+def test_check_issue_status_ignores_unlabeled_matching_title(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "ActioBio/bio-news-agent")
+    monkeypatch.setattr(
+        publisher,
+        "_today_issue_title",
+        lambda: "Biotech / Pharma Headlines – 2026-04-13",
+    )
+    monkeypatch.setattr(
+        publisher,
+        "_list_open_issues",
+        lambda owner, repo: [
+            {"number": 12, "title": "Biotech / Pharma Headlines – 2026-04-13", "labels": []}
+        ],
+    )
+
+    result = publisher.check_issue_status()
+
+    assert result == {
+        "exists": False,
+        "issue_number": None,
+        "title": "Biotech / Pharma Headlines – 2026-04-13",
+    }
+
+
+def test_check_issue_status_uses_lowest_issue_number_for_duplicates(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "ActioBio/bio-news-agent")
+    monkeypatch.setattr(
+        publisher,
+        "_today_issue_title",
+        lambda: "Biotech / Pharma Headlines – 2026-04-13",
+    )
+    monkeypatch.setattr(
+        publisher,
+        "_list_open_issues",
+        lambda owner, repo: [
+            {
+                "number": 13,
+                "title": "Biotech / Pharma Headlines – 2026-04-13",
+                "labels": [{"name": "ai-digest"}],
+            },
+            {
+                "number": 12,
+                "title": "Biotech / Pharma Headlines – 2026-04-13",
+                "labels": [{"name": "ai-digest"}],
+            },
+        ],
+    )
 
     result = publisher.check_issue_status()
 
@@ -74,11 +154,7 @@ def test_check_issue_status_reports_missing_issue(monkeypatch):
         lambda: "Biotech / Pharma Headlines – 2026-04-13",
     )
 
-    def fake_request(method: str, path: str, payload=None):
-        assert method == "GET"
-        return []
-
-    monkeypatch.setattr(publisher, "_github_api_request", fake_request)
+    monkeypatch.setattr(publisher, "_list_open_issues", lambda owner, repo: [])
 
     result = publisher.check_issue_status()
 
@@ -102,11 +178,10 @@ def test_publish_issue_creates_new_issue(tmp_path, monkeypatch):
     )
 
     calls: list[tuple[str, str, object | None]] = []
+    monkeypatch.setattr(publisher, "_list_open_issues", lambda owner, repo: [])
 
     def fake_request(method: str, path: str, payload=None):
         calls.append((method, path, payload))
-        if method == "GET":
-            return []
         if method == "POST":
             return {"number": 34}
         raise AssertionError(f"unexpected call: {method} {path}")
@@ -120,7 +195,17 @@ def test_publish_issue_creates_new_issue(tmp_path, monkeypatch):
         "issue_number": 34,
         "title": "Biotech / Pharma Headlines – 2026-04-13",
     }
-    assert calls[1][0] == "POST"
+    assert calls == [
+        (
+            "POST",
+            "/repos/ActioBio/bio-news-agent/issues",
+            {
+                "title": "Biotech / Pharma Headlines – 2026-04-13",
+                "body": "hello world",
+                "labels": ["ai-digest"],
+            },
+        )
+    ]
 
 
 def test_publish_issue_requires_token(tmp_path, monkeypatch):
@@ -158,16 +243,26 @@ def test_check_issue_status_falls_back_to_gh_cli(monkeypatch):
     )
 
     def fake_run(command, input=None, text=None, capture_output=None, check=None, env=None):
-        assert command[:4] == [
+        assert command == [
             "gh",
-            "api",
-            "/repos/ActioBio/bio-news-agent/issues?state=open&labels=ai-digest&per_page=100",
-            "--method",
+            "issue",
+            "list",
+            "--repo",
+            "ActioBio/bio-news-agent",
+            "--state",
+            "open",
+            "--limit",
+            "1000",
+            "--json",
+            "number,title,labels",
         ]
         return subprocess.CompletedProcess(
             command,
             0,
-            stdout='[{"number": 12, "title": "Biotech / Pharma Headlines – 2026-04-13"}]',
+            stdout=(
+                '[{"number": 12, "title": "Biotech / Pharma Headlines – 2026-04-13", '
+                '"labels": [{"name": "ai-digest"}]}]'
+            ),
             stderr="",
         )
 
@@ -198,10 +293,13 @@ def test_publish_issue_uses_gh_cli_when_no_token(tmp_path, monkeypatch):
 
     def fake_run(command, input=None, text=None, capture_output=None, check=None, env=None):
         calls.append((command, input))
-        if command[2] == "/repos/ActioBio/bio-news-agent/issues?state=open&labels=ai-digest&per_page=100":
+        if command[:3] == ["gh", "issue", "list"]:
             return subprocess.CompletedProcess(command, 0, stdout="[]", stderr="")
         if command[2] == "/repos/ActioBio/bio-news-agent/issues":
-            assert input == '{"title": "Biotech / Pharma Headlines \\u2013 2026-04-13", "body": "hello world", "labels": ["ai-digest"]}'
+            assert input == (
+                '{"title": "Biotech / Pharma Headlines \\u2013 2026-04-13", '
+                '"body": "hello world", "labels": ["ai-digest"]}'
+            )
             return subprocess.CompletedProcess(command, 0, stdout='{"number": 34}', stderr="")
         raise AssertionError(f"unexpected command: {command}")
 
@@ -236,6 +334,66 @@ def test_github_api_request_via_gh_strips_token_env(monkeypatch):
     assert "GH_TOKEN" not in captured_env
 
 
+def test_list_open_issues_via_graphql_token_paginates(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    def fake_graphql_request(query, variables, *, token):
+        assert query == publisher._OPEN_ISSUES_QUERY
+        assert token == "test-token"
+        calls.append(variables)
+        if variables["cursor"] is None:
+            return {
+                "repository": {
+                    "issues": {
+                        "nodes": [
+                            {
+                                "number": 13,
+                                "title": "Biotech / Pharma Headlines – 2026-04-13",
+                                "labels": {"nodes": [{"name": "ai-digest"}]},
+                            }
+                        ],
+                        "pageInfo": {"hasNextPage": True, "endCursor": "cursor-1"},
+                    }
+                }
+            }
+        return {
+            "repository": {
+                "issues": {
+                    "nodes": [
+                        {
+                            "number": 12,
+                            "title": "Biotech / Pharma Headlines – 2026-04-12",
+                            "labels": {"nodes": [{"name": "ai-digest"}]},
+                        }
+                    ],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            }
+        }
+
+    monkeypatch.setattr(publisher, "_github_graphql_request_via_token", fake_graphql_request)
+
+    issues = publisher._list_open_issues_via_graphql_token(
+        "ActioBio",
+        "bio-news-agent",
+        token="test-token",
+    )
+
+    assert [call["cursor"] for call in calls] == [None, "cursor-1"]
+    assert issues == [
+        {
+            "number": 13,
+            "title": "Biotech / Pharma Headlines – 2026-04-13",
+            "labels": [{"name": "ai-digest"}],
+        },
+        {
+            "number": 12,
+            "title": "Biotech / Pharma Headlines – 2026-04-12",
+            "labels": [{"name": "ai-digest"}],
+        },
+    ]
+
+
 def test_get_github_token_ignores_placeholder(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "ghp-your-token-here")
     monkeypatch.delenv("GH_TOKEN", raising=False)
@@ -261,16 +419,20 @@ def test_check_issue_status_falls_back_to_gh_when_token_auth_fails(monkeypatch):
     )
     monkeypatch.setattr(
         publisher,
-        "_github_api_request_via_token",
-        lambda method, path, *, token, payload=None: (_ for _ in ()).throw(
-            RuntimeError(f"GitHub API {method} {path} failed: 401 bad credentials")
+        "_list_open_issues_via_graphql_token",
+        lambda owner, repo, *, token: (_ for _ in ()).throw(
+            RuntimeError("GitHub GraphQL failed: 401 bad credentials")
         ),
     )
     monkeypatch.setattr(
         publisher,
-        "_github_api_request_via_gh",
-        lambda method, path, *, payload=None: [
-            {"number": 12, "title": "Biotech / Pharma Headlines – 2026-04-13"}
+        "_list_open_issues_via_gh",
+        lambda owner, repo: [
+            {
+                "number": 12,
+                "title": "Biotech / Pharma Headlines – 2026-04-13",
+                "labels": ["ai-digest"],
+            }
         ],
     )
 
