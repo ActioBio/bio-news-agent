@@ -58,10 +58,19 @@ query($owner: String!, $repo: String!, $cursor: String) {
 _PLACEHOLDER_GITHUB_TOKENS = frozenset(
     {
         "ghp-your-token-here",
+        "ghp_your_token_here",
+        "gho_your_token_here",
+        "github_pat_your_token_here",
         "github-token-here",
         "gh-token-here",
         "your-token-here",
+        "your_token_here",
     }
+)
+_GITHUB_TOKEN_ENV_NAMES = ("DIGEST_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")
+_MISSING_GITHUB_AUTH_MESSAGE = (
+    "Missing DIGEST_GITHUB_TOKEN, GITHUB_TOKEN, or GH_TOKEN for issue publishing, "
+    "and gh CLI is unavailable"
 )
 
 
@@ -94,10 +103,11 @@ _NEWS_FILE = _resolve_output_file(DIGEST_OUTPUT_FILE)
 
 
 def _get_github_token() -> str:
-    github_token = _normalize_github_token(os.getenv("GITHUB_TOKEN", ""))
-    if github_token:
-        return github_token
-    return _normalize_github_token(os.getenv("GH_TOKEN", ""))
+    for env_name in _GITHUB_TOKEN_ENV_NAMES:
+        token = _normalize_github_token(os.getenv(env_name, ""))
+        if token:
+            return token
+    return ""
 
 
 def _normalize_github_token(token: str) -> str:
@@ -105,9 +115,21 @@ def _normalize_github_token(token: str) -> str:
     if not normalized:
         return ""
     lowered = normalized.lower()
-    if lowered in _PLACEHOLDER_GITHUB_TOKENS or "your-token-here" in lowered:
+    if (
+        lowered in _PLACEHOLDER_GITHUB_TOKENS
+        or "your-token-here" in lowered
+        or "your_token_here" in lowered
+    ):
         return ""
     return normalized
+
+
+def _prefer_gh_cli() -> bool:
+    return os.getenv("GITHUB_ACTIONS", "").strip().lower() != "true"
+
+
+def _is_gh_cli_unavailable(message: str) -> bool:
+    return "gh cli is unavailable" in message.lower()
 
 
 def _get_repo_owner_name() -> tuple[str, str]:
@@ -144,6 +166,14 @@ def _github_api_request(
     payload: dict[str, Any] | None = None,
 ) -> Any:
     token = _get_github_token()
+    if _prefer_gh_cli():
+        try:
+            return _github_api_request_via_gh(method, path, payload=payload)
+        except RuntimeError as exc:
+            if not token or not _is_gh_cli_unavailable(str(exc)):
+                raise
+            return _github_api_request_via_token(method, path, token=token, payload=payload)
+
     if token:
         try:
             return _github_api_request_via_token(method, path, token=token, payload=payload)
@@ -220,8 +250,8 @@ def _github_api_request_via_gh(
 
     try:
         env = os.environ.copy()
-        env.pop("GITHUB_TOKEN", None)
-        env.pop("GH_TOKEN", None)
+        for env_name in _GITHUB_TOKEN_ENV_NAMES:
+            env.pop(env_name, None)
         result = subprocess.run(
             command,
             input=stdin,
@@ -231,9 +261,7 @@ def _github_api_request_via_gh(
             env=env,
         )
     except FileNotFoundError as exc:
-        raise RuntimeError(
-            "Missing GITHUB_TOKEN or GH_TOKEN for issue publishing, and gh CLI is unavailable"
-        ) from exc
+        raise RuntimeError(_MISSING_GITHUB_AUTH_MESSAGE) from exc
 
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "unknown gh error"
@@ -286,6 +314,14 @@ def _github_graphql_request_via_token(
 
 def _list_open_issues(owner: str, repo: str) -> list[dict[str, Any]]:
     token = _get_github_token()
+    if _prefer_gh_cli():
+        try:
+            return _list_open_issues_via_gh(owner, repo)
+        except RuntimeError as exc:
+            if not token or not _is_gh_cli_unavailable(str(exc)):
+                raise
+            return _list_open_issues_via_graphql_token(owner, repo, token=token)
+
     if token:
         try:
             return _list_open_issues_via_graphql_token(owner, repo, token=token)
@@ -343,8 +379,8 @@ def _list_open_issues_via_gh(owner: str, repo: str) -> list[dict[str, Any]]:
     ]
     try:
         env = os.environ.copy()
-        env.pop("GITHUB_TOKEN", None)
-        env.pop("GH_TOKEN", None)
+        for env_name in _GITHUB_TOKEN_ENV_NAMES:
+            env.pop(env_name, None)
         result = subprocess.run(
             command,
             text=True,
@@ -353,9 +389,7 @@ def _list_open_issues_via_gh(owner: str, repo: str) -> list[dict[str, Any]]:
             env=env,
         )
     except FileNotFoundError as exc:
-        raise RuntimeError(
-            "Missing GITHUB_TOKEN or GH_TOKEN for issue publishing, and gh CLI is unavailable"
-        ) from exc
+        raise RuntimeError(_MISSING_GITHUB_AUTH_MESSAGE) from exc
 
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "unknown gh error"

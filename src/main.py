@@ -44,6 +44,7 @@ _AUTH_ISSUE_ERROR_MARKERS = (
     "401",
 )
 _CONFIG_ISSUE_ERROR_MARKERS = (
+    "missing digest_github_token, github_token, or gh_token",
     "missing github_token or gh_token",
     "gh cli is unavailable",
     "invalid repository name",

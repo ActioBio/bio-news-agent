@@ -23,7 +23,8 @@
 - Do not use `uv run python src/main.py` for the daily automation path unless explicitly asked. That is the repo's default graph path and may use the repo LLM API path.
 - `--publish-issue` is a manual fallback only.
 - `--dispatch-publish` is the normal final publish path.
-- `--dispatch-publish` needs workflow-dispatch-capable GitHub auth through `GITHUB_TOKEN` / `GH_TOKEN` or authenticated local `gh`.
+- `--dispatch-publish` needs workflow-dispatch-capable GitHub auth through authenticated local `gh`, or through `DIGEST_GITHUB_TOKEN`, `GITHUB_TOKEN` / `GH_TOKEN` in CI-style environments.
+- For local Codex automation, use authenticated local `gh`; if it fails with 401, re-authenticate `gh` instead of switching the runbook to direct publish.
 
 ## Status Artifacts
 - `digest-run-status.json`: feed health and candidate export status.

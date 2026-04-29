@@ -14,7 +14,7 @@ def test_classify_issue_error_marks_transient_network_failure():
 
 def test_classify_issue_error_marks_missing_auth_as_config():
     kind, retryable = main._classify_issue_error(
-        "Missing GITHUB_TOKEN or GH_TOKEN for issue publishing"
+        "Missing DIGEST_GITHUB_TOKEN, GITHUB_TOKEN, or GH_TOKEN for issue publishing"
     )
 
     assert kind == "config"

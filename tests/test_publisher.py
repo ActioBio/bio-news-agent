@@ -316,6 +316,7 @@ def test_publish_issue_uses_gh_cli_when_no_token(tmp_path, monkeypatch):
 
 
 def test_github_api_request_via_gh_strips_token_env(monkeypatch):
+    monkeypatch.setenv("DIGEST_GITHUB_TOKEN", "real-token")
     monkeypatch.setenv("GITHUB_TOKEN", "ghp-your-token-here")
     monkeypatch.setenv("GH_TOKEN", "also-bad")
 
@@ -330,8 +331,45 @@ def test_github_api_request_via_gh_strips_token_env(monkeypatch):
 
     publisher._github_api_request_via_gh("GET", "/repos/ActioBio/bio-news-agent/issues")
 
+    assert "DIGEST_GITHUB_TOKEN" not in captured_env
     assert "GITHUB_TOKEN" not in captured_env
     assert "GH_TOKEN" not in captured_env
+
+
+def test_github_api_request_prefers_gh_cli_locally(monkeypatch):
+    monkeypatch.setenv("DIGEST_GITHUB_TOKEN", "digest-token")
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr(
+        publisher,
+        "_github_api_request_via_token",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected token path")),
+    )
+    monkeypatch.setattr(
+        publisher,
+        "_github_api_request_via_gh",
+        lambda method, path, *, payload=None: {"ok": True},
+    )
+
+    assert publisher._github_api_request("GET", "/repos/ActioBio/bio-news-agent") == {"ok": True}
+
+
+def test_github_api_request_prefers_token_in_github_actions(monkeypatch):
+    monkeypatch.setenv("DIGEST_GITHUB_TOKEN", "digest-token")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(
+        publisher,
+        "_github_api_request_via_token",
+        lambda method, path, *, token, payload=None: {"token": token},
+    )
+    monkeypatch.setattr(
+        publisher,
+        "_github_api_request_via_gh",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected gh path")),
+    )
+
+    assert publisher._github_api_request("GET", "/repos/ActioBio/bio-news-agent") == {
+        "token": "digest-token"
+    }
 
 
 def test_list_open_issues_via_graphql_token_paginates(monkeypatch):
@@ -395,22 +433,73 @@ def test_list_open_issues_via_graphql_token_paginates(monkeypatch):
 
 
 def test_get_github_token_ignores_placeholder(monkeypatch):
+    monkeypatch.setenv("DIGEST_GITHUB_TOKEN", "github_pat_your_token_here")
     monkeypatch.setenv("GITHUB_TOKEN", "ghp-your-token-here")
     monkeypatch.delenv("GH_TOKEN", raising=False)
 
     assert publisher._get_github_token() == ""
 
 
+def test_get_github_token_prefers_digest_token_over_generic_tokens(monkeypatch):
+    monkeypatch.setenv("DIGEST_GITHUB_TOKEN", "digest-token")
+    monkeypatch.setenv("GITHUB_TOKEN", "generic-token")
+    monkeypatch.setenv("GH_TOKEN", "gh-token")
+
+    assert publisher._get_github_token() == "digest-token"
+
+
 def test_get_github_token_prefers_real_gh_token_over_placeholder_github_token(monkeypatch):
+    monkeypatch.delenv("DIGEST_GITHUB_TOKEN", raising=False)
     monkeypatch.setenv("GITHUB_TOKEN", "ghp-your-token-here")
     monkeypatch.setenv("GH_TOKEN", "real-gh-token")
 
     assert publisher._get_github_token() == "real-gh-token"
 
 
+def test_list_open_issues_prefers_gh_cli_locally(monkeypatch):
+    monkeypatch.setenv("DIGEST_GITHUB_TOKEN", "digest-token")
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr(
+        publisher,
+        "_list_open_issues_via_graphql_token",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected token path")),
+    )
+    monkeypatch.setattr(
+        publisher,
+        "_list_open_issues_via_gh",
+        lambda owner, repo: [
+            {"number": 12, "title": "Biotech / Pharma Headlines – 2026-04-13"}
+        ],
+    )
+
+    assert publisher._list_open_issues("ActioBio", "bio-news-agent") == [
+        {"number": 12, "title": "Biotech / Pharma Headlines – 2026-04-13"}
+    ]
+
+
+def test_list_open_issues_prefers_token_in_github_actions(monkeypatch):
+    monkeypatch.setenv("DIGEST_GITHUB_TOKEN", "digest-token")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setattr(
+        publisher,
+        "_list_open_issues_via_graphql_token",
+        lambda owner, repo, *, token: [{"number": 12, "token": token}],
+    )
+    monkeypatch.setattr(
+        publisher,
+        "_list_open_issues_via_gh",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected gh path")),
+    )
+
+    assert publisher._list_open_issues("ActioBio", "bio-news-agent") == [
+        {"number": 12, "token": "digest-token"}
+    ]
+
+
 def test_check_issue_status_falls_back_to_gh_when_token_auth_fails(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "stale-token")
     monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GITHUB_REPOSITORY", "ActioBio/bio-news-agent")
     monkeypatch.setattr(
         publisher,

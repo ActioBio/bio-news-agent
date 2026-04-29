@@ -130,7 +130,7 @@ Daily agent runs:
 - Write `digest-decisions.json`, run `--apply-decisions`, then run `--dispatch-publish`.
 - After dispatch, wait briefly and re-run `--check-issue` to confirm the issue exists.
 
-`--dispatch-publish` prefers `GITHUB_TOKEN` or `GH_TOKEN` with workflow-dispatch access and falls back to authenticated local `gh`. Direct `--publish-issue` is still available as a manual fallback.
+Local runs prefer authenticated `gh` for `--dispatch-publish`; GitHub Actions and CI-style environments prefer `DIGEST_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `GH_TOKEN` with workflow-dispatch access. Direct `--publish-issue` is still available as a manual fallback.
 
 Agent decisions should use this JSON shape:
 
@@ -193,7 +193,7 @@ Pipeline notes:
 - Mixed regulator and institutional feeds can also be gated by source-specific title or link rules before grouping.
 - The source cap is still applied before LLM dedupe for diversity and lower cost.
 - Candidate export also writes `digest-run-status.json` with feed health, group counts, and sample `feed_errors` for automation use.
-- `--check-issue` writes `digest-issue-status.json` through the same repo-local GitHub path used for publishing, preferring `GITHUB_TOKEN` / `GH_TOKEN` and falling back to local `gh` auth. On failure it still writes a status artifact with `ok: false`, a `reason`, an `error_kind`, and a `retryable` flag so automation can distinguish transient GitHub failures from hard auth/config errors.
+- `--check-issue` writes `digest-issue-status.json` through the same repo-local GitHub path used for publishing, preferring authenticated `gh` locally and `DIGEST_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `GH_TOKEN` in GitHub Actions. On failure it still writes a status artifact with `ok: false`, a `reason`, an `error_kind`, and a `retryable` flag so automation can distinguish transient GitHub failures from hard auth/config errors.
 - `--candidates-only` exits nonzero only when feed health is bad enough to make the snapshot unreliable. Healthy empty days are reported as `reason: "no_fresh_items"` without failing.
 - Lower-priority `Company News` items are capped after ranking to keep fallback digests compact.
 - `discovery_only` feeds can still merge into a core story and contribute coverage context, but standalone discovery-only items are dropped before final render.
