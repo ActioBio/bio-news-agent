@@ -238,7 +238,7 @@ def test_collect_items_skips_failed_feeds(monkeypatch):
     )
 
     def fake_fetch(url: str):
-        if "bad.example.com" in url:
+        if url == "https://bad.example.com/rss":
             raise URLError("feed down")
         return Parsed()
 
@@ -286,7 +286,7 @@ def test_collect_items_with_stats_tracks_feed_health(monkeypatch):
     )
 
     def fake_fetch(url: str):
-        if "bad.example.com" in url:
+        if url == "https://bad.example.com/rss":
             raise URLError("feed down")
         return Parsed()
 
