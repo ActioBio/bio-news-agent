@@ -34,7 +34,7 @@
 - `news.md`: rendered digest body.
 
 ## Decision Shape
-- For the full input contract, inspect the current `digest-candidates.json` and the README decision-schema section. `keep_id` always refers to one item id from a candidate group.
+- For the full input contract, inspect the current `digest-candidates.json` and the decision-schema section in [docs/development.md](docs/development.md). `keep_id` always refers to one item id from a candidate group.
 - `clusters`: duplicate groups with `keep_id` and `duplicate_ids`
 - `top_stories`
 - `executive_summary`
