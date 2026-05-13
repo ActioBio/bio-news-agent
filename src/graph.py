@@ -41,6 +41,7 @@ try:
         OPENAI_RETRIES,
         OPENAI_TIMEOUT_SECONDS,
         PAPER_LIMIT,
+        resolve_repo_output_file,
     )
     from finalize import finalize_items as _finalize_items
     from filterer import deduplicate, exclude_noise
@@ -67,6 +68,7 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
         OPENAI_RETRIES,
         OPENAI_TIMEOUT_SECONDS,
         PAPER_LIMIT,
+        resolve_repo_output_file,
     )
     from .finalize import finalize_items as _finalize_items
     from .filterer import deduplicate, exclude_noise
@@ -93,15 +95,7 @@ _SUMMARY_ABBREVIATION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-
-def _resolve_output_file(path_value: str) -> Path:
-    output = Path(path_value)
-    if output.is_absolute():
-        return output
-    return (Path(__file__).resolve().parent.parent / output).resolve()
-
-
-_NEWS_FILE = _resolve_output_file(DIGEST_OUTPUT_FILE)
+_NEWS_FILE = resolve_repo_output_file(DIGEST_OUTPUT_FILE)
 _CANDIDATE_SNAPSHOT_VERSION = 4
 _MAX_PROMPT_SUMMARY_CHARS = 280
 _SHORT_TITLE_MAX_WORDS = 8

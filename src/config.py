@@ -6,8 +6,16 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load .env from project root
-_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_ENV_FILE = _REPO_ROOT / ".env"
 load_dotenv(_ENV_FILE)
+
+
+def resolve_repo_output_file(path_value: str) -> Path:
+    output = Path(path_value)
+    if output.is_absolute():
+        return output
+    return (_REPO_ROOT / output).resolve()
 
 
 def _get_env_str(name: str, default: str) -> str:

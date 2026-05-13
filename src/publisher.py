@@ -21,6 +21,7 @@ try:
         DIGEST_ISSUE_TITLE_PREFIX,
         DIGEST_OUTPUT_FILE,
         DIGEST_PUBLISH_WORKFLOW,
+        resolve_repo_output_file,
     )
 except ModuleNotFoundError:  # pragma: no cover - module execution fallback
     from .config import (
@@ -30,6 +31,7 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
         DIGEST_ISSUE_TITLE_PREFIX,
         DIGEST_OUTPUT_FILE,
         DIGEST_PUBLISH_WORKFLOW,
+        resolve_repo_output_file,
     )
 
 _GITHUB_API_BASE = "https://api.github.com"
@@ -91,15 +93,7 @@ class DispatchResult(TypedDict):
     ref: str
     title: str
 
-
-def _resolve_output_file(path_value: str) -> Path:
-    output = Path(path_value)
-    if output.is_absolute():
-        return output
-    return (Path(__file__).resolve().parent.parent / output).resolve()
-
-
-_NEWS_FILE = _resolve_output_file(DIGEST_OUTPUT_FILE)
+_NEWS_FILE = resolve_repo_output_file(DIGEST_OUTPUT_FILE)
 
 
 def _get_github_token() -> str:

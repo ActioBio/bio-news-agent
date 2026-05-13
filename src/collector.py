@@ -8,7 +8,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 from urllib.error import URLError
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
@@ -30,6 +30,7 @@ try:
         RSS_USER_AGENT,
     )
     from item_types import CollectedItem, FeedMode, SourceRole
+    from ranking import normalize_feed_mode, normalize_source_role
 except ModuleNotFoundError:  # pragma: no cover - module execution fallback
     from .config import (
         RSS_MAX_FEED_BYTES,
@@ -39,15 +40,12 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
         RSS_USER_AGENT,
     )
     from .item_types import CollectedItem, FeedMode, SourceRole
+    from .ranking import normalize_feed_mode, normalize_source_role
 
 logger = logging.getLogger(__name__)
 
 _DAY = timedelta(days=1)
 _FEEDS_FILE = Path(__file__).resolve().parent.parent / "feeds.json"
-_VALID_SOURCE_ROLES = frozenset(
-    {"primary", "independent_reporting", "commentary", "community"}
-)
-_VALID_FEED_MODES = frozenset({"core", "discovery_only"})
 _TRACKING_PARAMS = frozenset(
     [
         "utm_source",
@@ -73,18 +71,15 @@ class CollectionStats(TypedDict):
     feed_errors: list[dict[str, str]]
 
 
-def _normalize_source_role(value: Any) -> SourceRole:
-    source_role = str(value).strip().lower()
-    if source_role in _VALID_SOURCE_ROLES:
-        return source_role
-    return "independent_reporting"
-
-
-def _normalize_feed_mode(value: Any) -> FeedMode:
-    feed_mode = str(value).strip().lower()
-    if feed_mode in _VALID_FEED_MODES:
-        return feed_mode
-    return "core"
+class FeedFetchResult(TypedDict):
+    source: str
+    category: str
+    source_type: str
+    source_role: SourceRole
+    feed_mode: FeedMode
+    entries: list[dict[str, Any]]
+    ok: bool
+    error: str
 
 
 def _load_feeds() -> dict[str, dict[str, str]]:
@@ -117,8 +112,8 @@ def _load_feeds() -> dict[str, dict[str, str]]:
             logger.warning("Feed %s missing source; using %s", raw_url, source)
 
         source_type = str(raw_meta.get("type", "news")).strip().lower() or "news"
-        source_role = _normalize_source_role(raw_meta.get("source_role"))
-        feed_mode = _normalize_feed_mode(raw_meta.get("feed_mode"))
+        source_role = normalize_source_role(raw_meta.get("source_role"))
+        feed_mode = normalize_feed_mode(raw_meta.get("feed_mode"))
 
         validated[raw_url] = {
             "source": source,
@@ -164,18 +159,10 @@ def _parse_date(entry: dict[str, Any]) -> datetime | None:
     return None
 
 
-def _clean_summary(value: Any) -> str:
+def _clean_html_text(value: Any) -> str:
     if not value:
         return ""
 
-    text = html.unescape(str(value))
-    text = re.sub(r"<[^>]+>", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _clean_title(value: Any) -> str:
-    if not value:
-        return ""
     text = html.unescape(str(value))
     text = re.sub(r"<[^>]+>", " ", text)
     return re.sub(r"\s+", " ", text).strip()
@@ -212,18 +199,27 @@ def _fetch_with_retry(url: str) -> feedparser.FeedParserDict:
 def _fetch_feed_entries(
     url: str,
     meta: dict[str, str],
-) -> tuple[str, str, str, SourceRole, FeedMode, list[dict[str, Any]], bool, str]:
+) -> FeedFetchResult:
     category = meta.get("category", "All")
     source = meta.get("source", urlparse(url).netloc or "Unknown Source")
     source_type = meta.get("type", "news")
-    source_role = meta.get("source_role", "independent_reporting")
-    feed_mode = meta.get("feed_mode", "core")
+    source_role = cast(SourceRole, meta.get("source_role", "independent_reporting"))
+    feed_mode = cast(FeedMode, meta.get("feed_mode", "core"))
     try:
         logger.info("Fetching %s...", source)
         parsed = _fetch_with_retry(url)
     except Exception as exc:
         logger.error("Feed error for %s: %s", url, exc)
-        return source, category, source_type, source_role, feed_mode, [], False, str(exc)
+        return {
+            "source": source,
+            "category": category,
+            "source_type": source_type,
+            "source_role": source_role,
+            "feed_mode": feed_mode,
+            "entries": [],
+            "ok": False,
+            "error": str(exc),
+        }
 
     if parsed.bozo:
         logger.warning(
@@ -234,7 +230,9 @@ def _fetch_feed_entries(
 
     entries = list(parsed.entries) if hasattr(parsed, "entries") else []
     has_usable_entries = any(
-        _parse_date(entry) and _clean_title(entry.get("title", "")) and str(entry.get("link", "")).strip()
+        _parse_date(entry)
+        and _clean_html_text(entry.get("title", ""))
+        and str(entry.get("link", "")).strip()
         for entry in entries
     )
     ok = not parsed.bozo or has_usable_entries
@@ -245,7 +243,16 @@ def _fetch_feed_entries(
         )
     error_message = "" if ok else "malformed feed with no usable entries"
     logger.info("Found %d entries from %s", len(entries), source)
-    return source, category, source_type, source_role, feed_mode, entries, ok, error_message
+    return {
+        "source": source,
+        "category": category,
+        "source_type": source_type,
+        "source_role": source_role,
+        "feed_mode": feed_mode,
+        "entries": entries,
+        "ok": ok,
+        "error": error_message,
+    }
 
 
 def collect_items_with_stats() -> tuple[list[CollectedItem], CollectionStats]:
@@ -254,9 +261,7 @@ def collect_items_with_stats() -> tuple[list[CollectedItem], CollectionStats]:
     logger.info("Collecting items newer than %s", cutoff)
     items: list[CollectedItem] = []
     feeds = _load_feeds()
-    feed_results: list[
-        tuple[str, str, str, SourceRole, FeedMode, list[dict[str, Any]], bool, str]
-    ] = []
+    feed_results: list[FeedFetchResult] = []
 
     max_workers = max(1, min(RSS_MAX_WORKERS, len(feeds)))
     if max_workers == 1:
@@ -275,42 +280,42 @@ def collect_items_with_stats() -> tuple[list[CollectedItem], CollectionStats]:
     feeds_failed = 0
     feed_errors: list[dict[str, str]] = []
 
-    for source, category, source_type, source_role, feed_mode, entries, ok, error_message in feed_results:
-        if ok:
+    for result in feed_results:
+        if result["ok"]:
             feeds_succeeded += 1
         else:
             feeds_failed += 1
             feed_errors.append(
                 {
-                    "source": source,
-                    "error": error_message,
+                    "source": result["source"],
+                    "error": result["error"],
                 }
             )
-        for entry in entries:
+        for entry in result["entries"]:
             published = _parse_date(entry)
             if not published or published < cutoff:
                 continue
 
-            title = _clean_title(entry.get("title", ""))
+            title = _clean_html_text(entry.get("title", ""))
             link = str(entry.get("link", "")).strip()
             if not (title and link):
                 continue
 
             normalized_link = normalize_url(link)
-            summary = _clean_summary(entry.get("summary") or entry.get("description") or "")
+            summary = _clean_html_text(entry.get("summary") or entry.get("description") or "")
             items.append(
                 {
                     "id": normalized_link,
                     "title": title,
                     "original_title": title,
                     "link": link,
-                    "source": source,
+                    "source": result["source"],
                     "published": published,
-                    "category": category,
+                    "category": result["category"],
                     "summary": summary,
-                    "source_type": source_type,
-                    "source_role": source_role,
-                    "feed_mode": feed_mode,
+                    "source_type": result["source_type"],
+                    "source_role": result["source_role"],
+                    "feed_mode": result["feed_mode"],
                 }
             )
 
