@@ -1,6 +1,24 @@
 """Tests for main module helpers."""
 
+import importlib
+import sys
+
 import main
+
+
+def test_main_import_does_not_import_graph():
+    previous_main = sys.modules.pop("main", None)
+    previous_graph = sys.modules.pop("graph", None)
+
+    try:
+        importlib.import_module("main")
+
+        assert "graph" not in sys.modules
+    finally:
+        if previous_main is not None:
+            sys.modules["main"] = previous_main
+        if previous_graph is not None:
+            sys.modules["graph"] = previous_graph
 
 
 def test_classify_issue_error_marks_transient_network_failure():
