@@ -218,11 +218,19 @@ def _github_api_request_via_token(
     )
     try:
         with urlopen(request, timeout=30) as response:
-            return json.loads(response.read().decode("utf-8"))
+            body = response.read()
+            if not body:
+                return None
+            try:
+                return json.loads(body.decode("utf-8"))
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"GitHub API {method} {path} returned invalid JSON"
+                ) from exc
     except HTTPError as exc:  # pragma: no cover - exercised via behavior, not exact body
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"GitHub API {method} {path} failed: {exc.code} {detail}") from exc
-    except URLError as exc:  # pragma: no cover - network dependent
+    except (URLError, TimeoutError) as exc:  # pragma: no cover - network dependent
         raise RuntimeError(f"GitHub API {method} {path} failed: {exc}") from exc
 
 
@@ -299,7 +307,7 @@ def _github_graphql_request_via_token(
     except HTTPError as exc:  # pragma: no cover - exercised via behavior, not exact body
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"GitHub GraphQL failed: {exc.code} {detail}") from exc
-    except URLError as exc:  # pragma: no cover - network dependent
+    except (URLError, TimeoutError) as exc:  # pragma: no cover - network dependent
         raise RuntimeError(f"GitHub GraphQL failed: {exc}") from exc
 
     if not isinstance(payload, dict):

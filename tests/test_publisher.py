@@ -8,6 +8,20 @@ from pathlib import Path
 import publisher
 
 
+class _FakeResponse:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self) -> bytes:
+        return self._body
+
+
 def test_publish_issue_updates_existing_issue(tmp_path, monkeypatch):
     news_file = tmp_path / "news.md"
     news_file.write_text("hello world", encoding="utf-8")
@@ -581,3 +595,97 @@ def test_dispatch_publish_workflow_posts_dispatch_payload(tmp_path, monkeypatch)
             },
         )
     ]
+
+
+def test_dispatch_publish_workflow_token_path_accepts_empty_response(tmp_path, monkeypatch):
+    news_file = tmp_path / "news.md"
+    news_file.write_text("hello world", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.delenv("DIGEST_GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setenv("GITHUB_REPOSITORY", "ActioBio/bio-news-agent")
+    monkeypatch.setattr(
+        publisher,
+        "_today_issue_title",
+        lambda: "Biotech / Pharma Headlines – 2026-04-13",
+    )
+
+    calls = []
+
+    def fake_urlopen(request, timeout=30):
+        calls.append((request.get_method(), request.full_url, request.data))
+        return _FakeResponse(b"")
+
+    monkeypatch.setattr(publisher, "urlopen", fake_urlopen)
+
+    result = publisher.dispatch_publish_workflow(news_file)
+
+    assert result == {
+        "workflow": "publish-digest.yml",
+        "ref": "main",
+        "title": "Biotech / Pharma Headlines – 2026-04-13",
+    }
+    assert calls[0][0] == "POST"
+    assert calls[0][1] == (
+        "https://api.github.com/repos/ActioBio/bio-news-agent/actions/workflows/"
+        "publish-digest.yml/dispatches"
+    )
+
+
+def test_github_api_request_via_token_wraps_invalid_json(monkeypatch):
+    monkeypatch.setattr(
+        publisher,
+        "urlopen",
+        lambda request, timeout=30: _FakeResponse(b"not json"),
+    )
+
+    try:
+        publisher._github_api_request_via_token(
+            "GET",
+            "/repos/ActioBio/bio-news-agent/issues",
+            token="test-token",
+        )
+    except RuntimeError as exc:
+        assert "returned invalid JSON" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
+def test_github_api_request_via_token_wraps_timeout(monkeypatch):
+    def raise_timeout(request, timeout=30):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(publisher, "urlopen", raise_timeout)
+
+    try:
+        publisher._github_api_request_via_token(
+            "GET",
+            "/repos/ActioBio/bio-news-agent/issues",
+            token="test-token",
+        )
+    except RuntimeError as exc:
+        assert (
+            "GitHub API GET /repos/ActioBio/bio-news-agent/issues failed: timed out"
+            in str(exc)
+        )
+    else:
+        raise AssertionError("expected RuntimeError")
+
+
+def test_github_graphql_request_via_token_wraps_timeout(monkeypatch):
+    def raise_timeout(request, timeout=30):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(publisher, "urlopen", raise_timeout)
+
+    try:
+        publisher._github_graphql_request_via_token(
+            "query { viewer { login } }",
+            {},
+            token="test-token",
+        )
+    except RuntimeError as exc:
+        assert "GitHub GraphQL failed: timed out" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
