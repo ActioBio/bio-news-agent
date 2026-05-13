@@ -10,7 +10,7 @@
 ```bash
 UV_CACHE_DIR=.uv-cache uv sync --locked
 cp .env.example .env
-uv run python src/main.py
+UV_CACHE_DIR=.uv-cache uv run python src/main.py
 ```
 
 Add `OPENAI_API_KEY` to `.env` if you want the default graph path to use OpenAI directly. Placeholder values such as `sk-...` or `your_api_key_here` are treated as missing.
@@ -22,11 +22,11 @@ This path keeps feed collection and filtering in Python, then lets Codex or Clau
 **The canonical operational runbook is [AGENTS.md](../AGENTS.md).**
 
 ```bash
-uv run python src/main.py --check-issue --issue-status-file digest-issue-status.json
-uv run python src/main.py --candidates-only
+UV_CACHE_DIR=.uv-cache uv run python src/main.py --check-issue --issue-status-file digest-issue-status.json
+UV_CACHE_DIR=.uv-cache uv run python src/main.py --candidates-only
 # agent reads digest-candidates.json and writes digest-decisions.json
-uv run python src/main.py --apply-decisions digest-decisions.json
-uv run python src/main.py --dispatch-publish
+UV_CACHE_DIR=.uv-cache uv run python src/main.py --apply-decisions digest-decisions.json
+UV_CACHE_DIR=.uv-cache uv run python src/main.py --dispatch-publish
 ```
 
 `--check-issue` writes `digest-issue-status.json` by default. `--candidates-only` writes `digest-candidates.json` and `digest-run-status.json` by default. Use `--candidates-file <path>`, `--status-file <path>`, and `--issue-status-file <path>` to override these artifacts.

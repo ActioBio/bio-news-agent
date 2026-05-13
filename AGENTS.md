@@ -6,21 +6,21 @@
 
 ## Preferred Agent Flow
 1. `UV_CACHE_DIR=.uv-cache uv sync --locked`
-2. `uv run python src/main.py --check-issue --issue-status-file digest-issue-status.json`
+2. `UV_CACHE_DIR=.uv-cache uv run python src/main.py --check-issue --issue-status-file digest-issue-status.json`
 3. Stop if `digest-issue-status.json` says `ok: true` and `exists: true`.
 4. Stop if it says `ok: false` and `retryable: false`.
 5. If it says `ok: false` and `retryable: true`, continue.
-6. `RSS_MAX_WORKERS=2 RSS_TIMEOUT=15 uv run python src/main.py --candidates-only --status-file digest-run-status.json`
-7. If `digest-run-status.json` says `feed_fetch_failed` or `empty_snapshot_with_feed_errors`, retry once with `RSS_MAX_WORKERS=1 RSS_TIMEOUT=20`.
+6. `UV_CACHE_DIR=.uv-cache RSS_MAX_WORKERS=2 RSS_TIMEOUT=15 uv run python src/main.py --candidates-only --status-file digest-run-status.json`
+7. If `digest-run-status.json` says `feed_fetch_failed` or `empty_snapshot_with_feed_errors`, retry once with `UV_CACHE_DIR=.uv-cache RSS_MAX_WORKERS=1 RSS_TIMEOUT=20 uv run python src/main.py --candidates-only --status-file digest-run-status.json`.
 8. If the retry still fails, stop and report the failure reason.
 9. If status is healthy, write `digest-decisions.json` using the repo decision schema.
-10. `uv run python src/main.py --apply-decisions digest-decisions.json`
-11. `uv run python src/main.py --dispatch-publish`
+10. `UV_CACHE_DIR=.uv-cache uv run python src/main.py --apply-decisions digest-decisions.json`
+11. `UV_CACHE_DIR=.uv-cache uv run python src/main.py --dispatch-publish`
 12. Wait briefly, then re-run `--check-issue` to confirm the issue exists.
 
 ## Defaults
 - Prefer the agent path above for daily runs.
-- Do not use `uv run python src/main.py` for the daily automation path unless explicitly asked. That is the repo's default graph path and may use the repo LLM API path.
+- Do not use the default graph path (`UV_CACHE_DIR=.uv-cache uv run python src/main.py`) for the daily automation path unless explicitly asked. It may use the repo LLM API path.
 - `--publish-issue` is a manual fallback only.
 - `--dispatch-publish` is the normal final publish path.
 - `--dispatch-publish` needs workflow-dispatch-capable GitHub auth through authenticated local `gh`, or through `DIGEST_GITHUB_TOKEN`, `GITHUB_TOKEN` / `GH_TOKEN` in CI-style environments.
