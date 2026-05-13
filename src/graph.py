@@ -222,6 +222,13 @@ class ItemMatchData(TypedDict):
     title_tokens: set[str]
 
 
+class ResolvedResponseCluster(TypedDict):
+    requested_keep_id: str
+    keep_id: str
+    cluster_member_ids: list[str]
+    duplicate_items: list[CollectedItem]
+
+
 def _log_openai_retry(retry_state) -> None:
     exc = retry_state.outcome.exception() if retry_state.outcome else None
     logger.warning(
@@ -873,6 +880,57 @@ def _prepare_distinct_items(
     return prepared_items
 
 
+def _build_group_prompt_ids(
+    group_id: str,
+    group: list[CollectedItem],
+) -> dict[str, CollectedItem]:
+    return {
+        f"{group_id}i{item_index}": item
+        for item_index, item in enumerate(group, start=1)
+    }
+
+
+def _resolve_response_cluster(
+    cluster: dict[str, Any],
+    group_prompt_ids: dict[str, CollectedItem],
+    used_ids: set[str],
+) -> ResolvedResponseCluster | None:
+    requested_keep_id = str(cluster.get("keep_id", "")).strip()
+    if requested_keep_id not in group_prompt_ids or requested_keep_id in used_ids:
+        return None
+
+    duplicate_ids: list[str] = []
+    for raw_duplicate_id in cluster.get("duplicate_ids", []):
+        duplicate_id = str(raw_duplicate_id).strip()
+        if (
+            duplicate_id
+            and duplicate_id != requested_keep_id
+            and duplicate_id in group_prompt_ids
+            and duplicate_id not in used_ids
+        ):
+            duplicate_ids.append(duplicate_id)
+
+    keep_id = _promote_renderable_keep_id(
+        group_prompt_ids,
+        requested_keep_id,
+        duplicate_ids,
+    )
+    cluster_member_ids = [
+        prompt_id
+        for prompt_id in [requested_keep_id, *duplicate_ids]
+        if prompt_id != keep_id
+    ]
+    duplicate_items = _sort_items_by_source_role(
+        [group_prompt_ids[dup_id] for dup_id in cluster_member_ids]
+    )
+    return {
+        "requested_keep_id": requested_keep_id,
+        "keep_id": keep_id,
+        "cluster_member_ids": cluster_member_ids,
+        "duplicate_items": duplicate_items,
+    }
+
+
 def _apply_dedupe_response(
     indexed_groups: list[tuple[int, list[CollectedItem]]],
     response_payload: dict[str, Any],
@@ -894,65 +952,44 @@ def _apply_dedupe_response(
         ]
 
     kept_items: list[ResolvedItem] = []
-    skipped_items = 0
+    skipped_duplicates = 0
 
     for group_index, group in indexed_groups:
         group_id = f"g{group_index}"
         if group_id not in response_group_lookup:
             raise ValueError(f"LLM dedupe response missing group {group_id}")
 
-        group_prompt_ids = {
-            f"{group_id}i{item_index}": item
-            for item_index, item in enumerate(group, start=1)
-        }
+        group_prompt_ids = _build_group_prompt_ids(group_id, group)
         used_ids: set[str] = set()
 
         for cluster in response_group_lookup[group_id]:
-            requested_keep_id = str(cluster.get("keep_id", "")).strip()
-            if requested_keep_id not in group_prompt_ids or requested_keep_id in used_ids:
+            resolved_cluster = _resolve_response_cluster(
+                cluster,
+                group_prompt_ids,
+                used_ids,
+            )
+            if resolved_cluster is None:
                 continue
 
-            duplicate_ids: list[str] = []
-            for raw_duplicate_id in cluster.get("duplicate_ids", []):
-                duplicate_id = str(raw_duplicate_id).strip()
-                if (
-                    duplicate_id
-                    and duplicate_id != requested_keep_id
-                    and duplicate_id in group_prompt_ids
-                    and duplicate_id not in used_ids
-                ):
-                    duplicate_ids.append(duplicate_id)
-
-            keep_id = _promote_renderable_keep_id(
-                group_prompt_ids,
-                requested_keep_id,
-                duplicate_ids,
-            )
-            cluster_member_ids = [
-                prompt_id
-                for prompt_id in [requested_keep_id, *duplicate_ids]
-                if prompt_id != keep_id
-            ]
-            duplicate_items = _sort_items_by_source_role(
-                [group_prompt_ids[dup_id] for dup_id in cluster_member_ids]
-            )
+            keep_id = resolved_cluster["keep_id"]
+            cluster_member_ids = resolved_cluster["cluster_member_ids"]
             kept_items.append(
                 _seed_resolved_item(
                     group_prompt_ids[keep_id],
                     keep_id,
-                    duplicate_items=duplicate_items,
+                    duplicate_items=resolved_cluster["duplicate_items"],
                 )
             )
             used_ids.add(keep_id)
             used_ids.update(cluster_member_ids)
-            skipped_items += len(cluster_member_ids)
+            skipped_duplicates += len(cluster_member_ids)
 
         for prompt_id, item in group_prompt_ids.items():
             if prompt_id in used_ids:
                 continue
             kept_items.append(_seed_resolved_item(item, prompt_id))
 
-    return kept_items, skipped_items
+    return kept_items, skipped_duplicates
 
 
 def _apply_enrichment_response(
@@ -1066,10 +1103,7 @@ def _apply_structured_response(
 
     for group_index, group in enumerate(groups, start=1):
         group_id = f"g{group_index}"
-        group_prompt_ids = {
-            f"{group_id}i{item_index}": item
-            for item_index, item in enumerate(group, start=1)
-        }
+        group_prompt_ids = _build_group_prompt_ids(group_id, group)
         group_response = response_group_lookup.get(group_id, {})
         group_clusters = group_response.get("clusters", [])
         off_topic_ids = {
@@ -1081,37 +1115,21 @@ def _apply_structured_response(
         skipped_items += len(off_topic_ids)
 
         for cluster in group_clusters:
-            requested_keep_id = str(cluster.get("keep_id", "")).strip()
-            if requested_keep_id not in group_prompt_ids or requested_keep_id in used_ids:
+            resolved_cluster = _resolve_response_cluster(
+                cluster,
+                group_prompt_ids,
+                used_ids,
+            )
+            if resolved_cluster is None:
                 continue
 
-            duplicate_ids: list[str] = []
-            for raw_duplicate_id in cluster.get("duplicate_ids", []):
-                duplicate_id = str(raw_duplicate_id).strip()
-                if (
-                    duplicate_id
-                    and duplicate_id != requested_keep_id
-                    and duplicate_id in group_prompt_ids
-                    and duplicate_id not in used_ids
-                ):
-                    duplicate_ids.append(duplicate_id)
-
-            keep_id = _promote_renderable_keep_id(
-                group_prompt_ids,
-                requested_keep_id,
-                duplicate_ids,
-            )
+            requested_keep_id = resolved_cluster["requested_keep_id"]
+            keep_id = resolved_cluster["keep_id"]
             if keep_id != requested_keep_id:
                 top_story_aliases[requested_keep_id] = keep_id
             keep_item = cast(ResolvedItem, group_prompt_ids[keep_id])
-            cluster_member_ids = [
-                prompt_id
-                for prompt_id in [requested_keep_id, *duplicate_ids]
-                if prompt_id != keep_id
-            ]
-            duplicate_items = _sort_items_by_source_role(
-                [group_prompt_ids[dup_id] for dup_id in cluster_member_ids]
-            )
+            cluster_member_ids = resolved_cluster["cluster_member_ids"]
+            duplicate_items = resolved_cluster["duplicate_items"]
             keep_item["category"] = _validate_category(cluster.get("category"), keep_item)
             keep_item["title"] = _clean_short_title(
                 cluster.get("short_title"),
@@ -1140,14 +1158,7 @@ def _apply_structured_response(
         for prompt_id, item in group_prompt_ids.items():
             if prompt_id in used_ids:
                 continue
-            resolved_item = cast(ResolvedItem, item)
-            resolved_item["title"] = _title_for_matching(item)
-            resolved_item["category"] = _keyword_categorize(_title_for_matching(item))
-            resolved_item["_prompt_id"] = prompt_id
-            resolved_item["summary_line"] = _fallback_summary_line(item)
-            resolved_item["tier"] = "normal"
-            resolved_item["coverage_sources"] = []
-            kept_items.append(resolved_item)
+            kept_items.append(_seed_resolved_item(item, prompt_id))
 
     state["executive_summary"] = executive_summary
     state["top_stories"] = [top_story_aliases.get(story_id, story_id) for story_id in top_story_ids]
@@ -1269,39 +1280,42 @@ def node_filter(state: DigestState) -> DigestState:
     return state
 
 
-def node_categorize(state: DigestState) -> DigestState:
-    items = cast(list[CollectedItem], state.get("items", []))
-    if not items:
-        collector_stats = cast(
-            CollectionStats,
-            state.get(
-                "collection_stats",
-                {
-                    "feeds_total": 0,
-                    "feeds_succeeded": 0,
-                    "feeds_failed": 0,
-                    "items_collected": 0,
-                },
-            ),
+def _categorize_empty_state(state: DigestState) -> DigestState:
+    collector_stats = cast(
+        CollectionStats,
+        state.get(
+            "collection_stats",
+            {
+                "feeds_total": 0,
+                "feeds_succeeded": 0,
+                "feeds_failed": 0,
+                "items_collected": 0,
+            },
+        ),
+    )
+    export_status = _build_candidate_export_status(
+        collector_stats,
+        items_filtered=0,
+        groups=0,
+    )
+    if not export_status["ok"]:
+        raise RuntimeError(
+            "Candidate export failed health checks: "
+            f"{export_status['reason']} "
+            f"(feeds_total={export_status['feeds_total']}, "
+            f"feeds_failed={export_status['feeds_failed']})"
         )
-        export_status = _build_candidate_export_status(
-            collector_stats,
-            items_filtered=0,
-            groups=0,
-        )
-        if not export_status["ok"]:
-            raise RuntimeError(
-                "Candidate export failed health checks: "
-                f"{export_status['reason']} "
-                f"(feeds_total={export_status['feeds_total']}, "
-                f"feeds_failed={export_status['feeds_failed']})"
-            )
-        logger.warning("No items to categorize")
-        return state
+    logger.warning("No items to categorize")
+    return state
 
-    groups = _build_candidate_groups(items)
+
+def _index_candidate_groups(
+    groups: list[list[CollectedItem]],
+) -> tuple[
+    list[tuple[int, list[CollectedItem]]],
+    list[tuple[int, list[CollectedItem]]],
+]:
     indexed_groups = list(enumerate(groups, start=1))
-    ambiguous_groups = [group for group in groups if len(group) > 1]
     ambiguous_indexed_groups = [
         (group_index, group)
         for group_index, group in indexed_groups
@@ -1312,45 +1326,42 @@ def node_categorize(state: DigestState) -> DigestState:
         for group_index, group in indexed_groups
         if len(group) == 1
     ]
-    logger.info(
-        "Built %d candidate groups (%d ambiguous)",
-        len(groups),
-        len(ambiguous_groups),
+    return ambiguous_indexed_groups, distinct_indexed_groups
+
+
+def _finalize_local_categorization(
+    state: DigestState,
+    groups: list[list[CollectedItem]],
+    *,
+    log_label: str,
+    duplicate_matcher: Callable[[ItemMatchData, ItemMatchData], bool] = _is_candidate_duplicate_data,
+) -> DigestState:
+    resolved_items, skipped_duplicates = _fallback_resolve_groups(
+        groups,
+        duplicate_matcher=duplicate_matcher,
     )
+    state["executive_summary"] = ""
+    state["top_stories"] = []
+    return cast(DigestState, _finalize_items(
+        state,
+        resolved_items,
+        skipped_duplicates,
+        log_label=log_label,
+        logger=logger,
+        paper_limit=PAPER_LIMIT,
+        company_news_limit=COMPANY_NEWS_LIMIT,
+    ))
 
-    api_key = _get_openai_api_key()
-    if not api_key:
-        logger.warning(
-            "No valid OPENAI_API_KEY found, using local duplicate resolution"
-        )
-        fallback_groups = _build_fallback_candidate_groups(items)
-        resolved_items, skipped_items = _fallback_resolve_groups(
-            fallback_groups,
-            duplicate_matcher=_is_fallback_candidate_duplicate_data,
-        )
-        state["executive_summary"] = ""
-        state["top_stories"] = []
-        return cast(DigestState, _finalize_items(
-            state,
-            resolved_items,
-            skipped_items,
-            log_label="After categorization",
-            logger=logger,
-            paper_limit=PAPER_LIMIT,
-            company_news_limit=COMPANY_NEWS_LIMIT,
-        ))
 
-    try:
-        client = _get_openai_client(api_key)
-        skipped_items = 0
-        resolved_items = _prepare_distinct_items(distinct_indexed_groups)
-
-        if ambiguous_indexed_groups:
-            dedupe_payload = json.dumps(
-                {"groups": _build_dedupe_prompt_groups(ambiguous_indexed_groups)},
-                ensure_ascii=True,
-            )
-            dedupe_prompt = f"""Deduplicate these biotech and pharma news groups.
+def _dedupe_ambiguous_groups(
+    client: OpenAI,
+    ambiguous_indexed_groups: list[tuple[int, list[CollectedItem]]],
+) -> tuple[list[ResolvedItem], int]:
+    dedupe_payload = json.dumps(
+        {"groups": _build_dedupe_prompt_groups(ambiguous_indexed_groups)},
+        ensure_ascii=True,
+    )
+    dedupe_prompt = f"""Deduplicate these biotech and pharma news groups.
 
 Each group contains possible near-duplicates. Only compare items within the same group.
 
@@ -1380,19 +1391,26 @@ Input JSON:
 {dedupe_payload}
 """
 
-            dedupe_response = _extract_json_object(_chat_completion_text(client, dedupe_prompt))
-            deduped_items, skipped_items = _apply_dedupe_response(
-                ambiguous_indexed_groups,
-                dedupe_response,
-            )
-            resolved_items.extend(deduped_items)
+    dedupe_response = _extract_json_object(_chat_completion_text(client, dedupe_prompt))
+    return _apply_dedupe_response(
+        ambiguous_indexed_groups,
+        dedupe_response,
+    )
 
-        categories_str = "\n".join(f"- {category}" for category in CATEGORIES)
-        enrichment_payload = json.dumps(
-            {"items": [_serialize_enrichment_item(item) for item in resolved_items]},
-            ensure_ascii=True,
-        )
-        enrichment_prompt = f"""Enrich these deduplicated biotech and pharma news items for the daily digest.
+
+def _enrich_resolved_items(
+    state: DigestState,
+    client: OpenAI,
+    resolved_items: list[ResolvedItem],
+    *,
+    skipped_items: int,
+) -> DigestState:
+    categories_str = "\n".join(f"- {category}" for category in CATEGORIES)
+    enrichment_payload = json.dumps(
+        {"items": [_serialize_enrichment_item(item) for item in resolved_items]},
+        ensure_ascii=True,
+    )
+    enrichment_prompt = f"""Enrich these deduplicated biotech and pharma news items for the daily digest.
 
 Each item is already deduplicated.
 
@@ -1429,37 +1447,84 @@ Input JSON:
 {enrichment_payload}
 """
 
-        enrichment_response = _extract_json_object(
-            _chat_completion_text(client, enrichment_prompt)
+    enrichment_response = _extract_json_object(
+        _chat_completion_text(client, enrichment_prompt)
+    )
+    return _apply_enrichment_response(
+        state,
+        resolved_items,
+        enrichment_response,
+        skipped_items=skipped_items,
+        log_label="After categorization",
+    )
+
+
+def _categorize_with_openai(
+    state: DigestState,
+    api_key: str,
+    ambiguous_indexed_groups: list[tuple[int, list[CollectedItem]]],
+    distinct_indexed_groups: list[tuple[int, list[CollectedItem]]],
+) -> DigestState:
+    client = _get_openai_client(api_key)
+    skipped_items = 0
+    resolved_items = _prepare_distinct_items(distinct_indexed_groups)
+
+    if ambiguous_indexed_groups:
+        deduped_items, skipped_items = _dedupe_ambiguous_groups(
+            client,
+            ambiguous_indexed_groups,
         )
-        return _apply_enrichment_response(
+        resolved_items.extend(deduped_items)
+
+    return _enrich_resolved_items(
+        state,
+        client,
+        resolved_items,
+        skipped_items=skipped_items,
+    )
+
+
+def node_categorize(state: DigestState) -> DigestState:
+    items = cast(list[CollectedItem], state.get("items", []))
+    if not items:
+        return _categorize_empty_state(state)
+
+    groups = _build_candidate_groups(items)
+    ambiguous_indexed_groups, distinct_indexed_groups = _index_candidate_groups(groups)
+    logger.info(
+        "Built %d candidate groups (%d ambiguous)",
+        len(groups),
+        len(ambiguous_indexed_groups),
+    )
+
+    api_key = _get_openai_api_key()
+    if not api_key:
+        logger.warning("No valid OPENAI_API_KEY found, using local duplicate resolution")
+        return _finalize_local_categorization(
             state,
-            resolved_items,
-            enrichment_response,
-            skipped_items=skipped_items,
+            _build_fallback_candidate_groups(items),
             log_label="After categorization",
+            duplicate_matcher=_is_fallback_candidate_duplicate_data,
+        )
+
+    try:
+        return _categorize_with_openai(
+            state,
+            api_key,
+            ambiguous_indexed_groups,
+            distinct_indexed_groups,
         )
     except Exception as exc:
         logger.error(
             "Categorization error: %s. Falling back to local duplicate resolution.",
             exc,
         )
-        fallback_groups = _build_fallback_candidate_groups(items)
-        resolved_items, skipped_items = _fallback_resolve_groups(
-            fallback_groups,
+        return _finalize_local_categorization(
+            state,
+            _build_fallback_candidate_groups(items),
+            log_label="After local categorization",
             duplicate_matcher=_is_fallback_candidate_duplicate_data,
         )
-        state["executive_summary"] = ""
-        state["top_stories"] = []
-        return cast(DigestState, _finalize_items(
-            state,
-            resolved_items,
-            skipped_items,
-            log_label="After local categorization",
-            logger=logger,
-            paper_limit=PAPER_LIMIT,
-            company_news_limit=COMPANY_NEWS_LIMIT,
-        ))
 
 
 def node_render(state: DigestState) -> DigestState:
