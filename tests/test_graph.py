@@ -327,6 +327,40 @@ def test_export_candidate_snapshot_allows_healthy_empty_day(tmp_path, monkeypatc
     assert status["feed_errors"] == []
 
 
+def test_export_candidate_snapshot_allows_empty_day_with_partial_feed_errors(
+    tmp_path,
+    monkeypatch,
+):
+    feed_errors = [
+        {
+            "source": "Endpoints News",
+            "error": "HTTP Error 403: Forbidden",
+        }
+    ]
+    monkeypatch.setattr(
+        graph,
+        "collect_items_with_stats",
+        lambda: (
+            [],
+            {
+                "feeds_total": 3,
+                "feeds_succeeded": 2,
+                "feeds_failed": 1,
+                "items_collected": 0,
+                "feed_errors": feed_errors,
+            },
+        ),
+    )
+
+    snapshot_file = tmp_path / "digest-candidates.json"
+    snapshot_payload, status = export_candidate_snapshot(snapshot_file)
+
+    assert snapshot_payload["groups"] == []
+    assert status["ok"] is True
+    assert status["reason"] == "no_fresh_items"
+    assert status["feed_errors"] == feed_errors
+
+
 def test_export_candidate_snapshot_fails_when_no_feeds_are_configured(tmp_path, monkeypatch):
     monkeypatch.setattr(
         graph,

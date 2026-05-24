@@ -1208,9 +1208,6 @@ def _build_candidate_export_status(
     elif collector_stats["feeds_succeeded"] == 0:
         ok = False
         reason = "feed_fetch_failed"
-    elif groups == 0 and collector_stats["feeds_failed"] > 0:
-        ok = False
-        reason = "empty_snapshot_with_feed_errors"
     elif groups == 0:
         reason = "no_fresh_items"
 

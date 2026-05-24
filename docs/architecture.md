@@ -85,7 +85,7 @@ flowchart LR
 - Candidate export writes `digest-run-status.json` with feed health, group counts, and sample `feed_errors` for automation use.
 - `--check-issue` writes `digest-issue-status.json`, preferring authenticated `gh` locally and `DIGEST_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `GH_TOKEN` in GitHub Actions.
 - On GitHub failure, the issue-status artifact includes `ok: false`, a `reason`, an `error_kind`, and a `retryable` flag.
-- `--candidates-only` exits nonzero only when feed health is bad enough to make the snapshot unreliable. Healthy empty days are reported as `reason: "no_fresh_items"` without failing.
+- `--candidates-only` exits nonzero only when feed health is bad enough to make the snapshot unreliable. Empty days are reported as `reason: "no_fresh_items"` without failing, even when optional feeds have warnings.
 - Lower-priority `Company News` items are capped after ranking to keep fallback digests compact.
 - `discovery_only` feeds can still merge into a core story and contribute coverage context, but standalone discovery-only items are dropped before final render.
 - Placeholder OpenAI API keys from either the shell environment or `.env` are ignored for local runs.

@@ -5,7 +5,7 @@ Use [AGENTS.md](./AGENTS.md) as the canonical repo guide.
 ## Short Version
 1. Run `--check-issue` first.
 2. Run `--candidates-only` and inspect `digest-run-status.json`.
-3. Write `digest-decisions.json`.
+3. Stop on `no_fresh_items`; otherwise write `digest-decisions.json`.
 4. Run `--apply-decisions`.
 5. Run `--dispatch-publish`.
 6. Re-run `--check-issue` to confirm the issue exists.
