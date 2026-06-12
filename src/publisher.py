@@ -6,6 +6,7 @@ import base64
 import gzip
 import json
 import os
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +37,9 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
 
 _GITHUB_API_BASE = "https://api.github.com"
 _MAX_ISSUE_BODY_CHARS = 65_000
+_MAX_TITLE_STORY_CHARS = 100
+_MONTH_ABBREVS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+_TOP_STORY_LINE_PATTERN = re.compile(r"^- \*\*\[(.+?)\]\(", re.MULTILINE)
 _OPEN_ISSUES_QUERY = """
 query($owner: String!, $repo: String!, $cursor: String) {
   repository(owner: $owner, name: $repo) {
@@ -43,6 +47,7 @@ query($owner: String!, $repo: String!, $cursor: String) {
       nodes {
         number
         title
+        createdAt
         labels(first: 20) {
           nodes {
             name
@@ -135,12 +140,39 @@ def _get_repo_owner_name() -> tuple[str, str]:
     return owner, repo
 
 
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _today_title_base() -> str:
+    now = _utcnow()
+    return f"{DIGEST_ISSUE_TITLE_PREFIX} - {_MONTH_ABBREVS[now.month - 1]} {now.day}"
+
+
 def _today_issue_title() -> str:
     override = os.getenv("DIGEST_ISSUE_TITLE_OVERRIDE", "").strip()
     if override:
         return override
-    today = datetime.now(timezone.utc).date().isoformat()
-    return f"{DIGEST_ISSUE_TITLE_PREFIX} – {today}"
+    return _today_title_base()
+
+
+def _leading_top_story(digest_body: str) -> str:
+    match = _TOP_STORY_LINE_PATTERN.search(digest_body)
+    if not match:
+        return ""
+    story = match.group(1).strip()
+    if len(story) > _MAX_TITLE_STORY_CHARS:
+        story = story[: _MAX_TITLE_STORY_CHARS - 1].rstrip() + "…"
+    return story
+
+
+def _issue_title_for_body(digest_body: str) -> str:
+    override = os.getenv("DIGEST_ISSUE_TITLE_OVERRIDE", "").strip()
+    if override:
+        return override
+    base = _today_title_base()
+    story = _leading_top_story(digest_body)
+    return f"{base}: {story}" if story else base
 
 
 def _read_digest_body(news_file: Path) -> str:
@@ -378,6 +410,7 @@ def _list_open_issues_via_graphql_token(
                 {
                     "number": issue["number"],
                     "title": issue["title"],
+                    "createdAt": issue.get("createdAt", ""),
                     "labels": labels,
                 }
             )
@@ -400,7 +433,7 @@ def _list_open_issues_via_gh(owner: str, repo: str) -> list[dict[str, Any]]:
         "--limit",
         "1000",
         "--json",
-        "number,title,labels",
+        "number,title,labels,createdAt",
     ]
     payload = _run_gh_json(
         command,
@@ -414,25 +447,29 @@ def _list_open_issues_via_gh(owner: str, repo: str) -> list[dict[str, Any]]:
 
 def check_issue_status() -> IssueStatusResult:
     owner, repo = _get_repo_owner_name()
-    issue_title = _today_issue_title()
     issues = _list_open_issues(owner, repo)
 
     matching_issues = [
         issue
         for issue in issues
         if isinstance(issue, dict)
-        and issue.get("title") == issue_title
+        and _issue_created_today(issue)
         and _issue_has_label(issue, DIGEST_ISSUE_LABEL)
     ]
     if not matching_issues:
-        return {"exists": False, "issue_number": None, "title": issue_title}
+        return {"exists": False, "issue_number": None, "title": _today_issue_title()}
 
     existing_issue = min(matching_issues, key=lambda issue: int(issue["number"]))
     return {
         "exists": True,
         "issue_number": int(existing_issue["number"]),
-        "title": issue_title,
+        "title": str(existing_issue.get("title", "")),
     }
+
+
+def _issue_created_today(issue: dict[str, Any]) -> bool:
+    created_at = str(issue.get("createdAt", ""))
+    return created_at[:10] == _utcnow().date().isoformat()
 
 
 def _issue_has_label(issue: dict[str, Any], label_name: str) -> bool:
@@ -449,6 +486,7 @@ def _issue_has_label(issue: dict[str, Any], label_name: str) -> bool:
 
 def publish_issue(news_file: Path | None = None) -> PublishResult:
     digest_body = _read_digest_body(news_file or _NEWS_FILE)
+    issue_title = _issue_title_for_body(digest_body)
     issue_status = check_issue_status()
     owner, repo = _get_repo_owner_name()
 
@@ -460,15 +498,15 @@ def publish_issue(news_file: Path | None = None) -> PublishResult:
         _github_api_request(
             "PATCH",
             f"/repos/{owner}/{repo}/issues/{issue_number}",
-            payload={"body": digest_body},
+            payload={"title": issue_title, "body": digest_body},
         )
-        return {"action": "updated", "issue_number": issue_number, "title": issue_status["title"]}
+        return {"action": "updated", "issue_number": issue_number, "title": issue_title}
 
     created_issue = _github_api_request(
         "POST",
         f"/repos/{owner}/{repo}/issues",
         payload={
-            "title": issue_status["title"],
+            "title": issue_title,
             "body": digest_body,
             "labels": [DIGEST_ISSUE_LABEL],
         },
@@ -478,13 +516,13 @@ def publish_issue(news_file: Path | None = None) -> PublishResult:
     return {
         "action": "created",
         "issue_number": int(created_issue["number"]),
-        "title": issue_status["title"],
+        "title": issue_title,
     }
 
 
 def dispatch_publish_workflow(news_file: Path | None = None) -> DispatchResult:
-    issue_title = _today_issue_title()
     digest_body = _read_digest_body(news_file or _NEWS_FILE)
+    issue_title = _issue_title_for_body(digest_body)
     owner, repo = _get_repo_owner_name()
     _github_api_request(
         "POST",
