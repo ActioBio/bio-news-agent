@@ -29,14 +29,13 @@ jobs:
         with:
           script: |
             const today = new Date().toISOString().slice(0,10);
-            const title = `Biotech / Pharma Headlines – ${today}`;
             const query = `
               query($owner: String!, $repo: String!, $cursor: String) {
                 repository(owner: $owner, name: $repo) {
                   issues(first: 100, after: $cursor, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC}) {
                     nodes {
                       number
-                      title
+                      createdAt
                       labels(first: 20) {
                         nodes {
                           name
@@ -64,7 +63,7 @@ jobs:
               });
               const issues = result.repository.issues;
               existing = issues.nodes.find(issue =>
-                issue.title === title &&
+                issue.createdAt.slice(0, 10) === today &&
                 issue.labels.nodes.some(label => label.name === 'ai-digest')
               );
               cursor = issues.pageInfo.endCursor;
