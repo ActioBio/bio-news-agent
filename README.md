@@ -1,32 +1,48 @@
-# Bio News Agent
+# Daily Biotech & Pharma News Digest
 
-[![Daily Biotech / Pharma Digest](https://github.com/ActioBio/bio-news-agent/actions/workflows/digest.yml/badge.svg)](https://github.com/ActioBio/bio-news-agent/actions/workflows/digest.yml)
-[![Read latest digests](https://img.shields.io/badge/Read-latest%20digests-181717?logo=github&logoColor=white)](https://github.com/ActioBio/bio-news-agent/issues?q=label%3A%22ai-digest%22)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+One short email a day with the biotech and pharma news that matters — picked from 15 trusted sources (STAT, Endpoints News, BioPharma Dive, FierceBiotech, BioSpace, FDA, EMA, and more) and readable in two minutes.
 
-A short daily digest of biotech and pharma news, delivered to your inbox. Headlines are collected from trusted industry, regulatory, and research sources, deduplicated, grouped by topic, and posted as a GitHub Issue every day.
+**[📬 Subscribe to the daily email](https://github.com/ActioBio/bio-news-agent/subscription)** · **[📖 Read the latest digest](https://github.com/ActioBio/bio-news-agent/issues?q=label%3A%22ai-digest%22)**
 
-## Get the daily digest
+## How to subscribe (about 30 seconds)
 
-🔔 **[Watch this repository](https://github.com/ActioBio/bio-news-agent/subscription)** with notifications set to **Issues**. GitHub will email you each new digest. A GitHub account is required for email notifications; no separate newsletter service.
+Delivery is handled by GitHub's built-in notifications — free, no newsletter service, no signup form, no ads. You just need a free [GitHub account](https://github.com/signup).
 
-[**→ Browse all digests**](https://github.com/ActioBio/bio-news-agent/issues?q=label%3A%22ai-digest%22)
+1. Open the **[subscription page](https://github.com/ActioBio/bio-news-agent/subscription)** — it's this repository's "Watch" menu.
+2. Choose **Custom**, tick **Issues**, and click **Apply**. Each digest is published here as a public daily post, and "Issues" is GitHub's name for those posts.
+3. Done — new digests arrive in your inbox each day.
+
+Normally that's one email per day — the digest itself. To stop, open the same page and choose **Unwatch**. If nothing arrives, check that email is enabled in your [notification settings](https://github.com/settings/notifications).
+
+> **Watch, don't star.** Starring bookmarks the repository but doesn't subscribe you to anything — only watching (steps above) delivers the digest.
 
 ## What it looks like
 
-Top stories from **May 13, 2026**:
+<img src="docs/images/digest-email-preview.svg" alt="Example of the daily digest email: top stories and topic sections with linked headlines" width="680">
 
-- **[FDA chief Makary resigns](https://www.biopharmadive.com/news/makary-fda-commissioner-resign-trump/819757/)** — BioPharma Dive
-- **[Gene therapy viruses linked to tumor](https://www.statnews.com/2026/05/13/gene-therapy-cancer-risks-mps-hurler-syndrome/?utm_campaign=rss)** — STAT Biotech
-- **[Isomorphic raises $2.1 billion](https://www.biospace.com/business/ai-fueled-isomorphic-bags-2-1b-the-second-largest-biotech-round-ever)** — BioSpace Business
+From the **June 12, 2026** digest:
 
-*[Browse latest digests →](https://github.com/ActioBio/bio-news-agent/issues?q=label%3A%22ai-digest%22)*
+- **[MHRA approves oral GLP-1 for weight loss](https://www.gov.uk/government/news/first-glp-1-tablet-for-weight-loss-approved-in-the-uk)** — MHRA
+- **[Novartis reports Avidity dystrophy data](https://www.biospace.com/drug-development/novartis-12b-avidity-buy-pays-dividends-with-phase-1-2-muscular-dystrophy-win)** — BioSpace Drug Development
+- **[WuXi AppTec sues Pentagon](https://endpoints.news/wuxi-apptec-sues-pentagon-in-challenge-over-inclusion-on-chinese-military-list/)** — Endpoints News
+
+Each digest leads with the day's top stories, then groups the rest by topic — Regulatory & FDA, Clinical & Research, Deals & Finance, Company News — so you can skim straight to what interests you.
 
 ## How it works
 
-Every morning, an automated workflow reads the RSS feeds listed in [`feeds.json`](feeds.json), removes duplicates, groups related stories, and asks an LLM to pick the most important ones. The result is posted as one skimmable GitHub Issue.
+Every day, an automated workflow reads the headlines published by the sources in [`feeds.json`](feeds.json), removes duplicates, groups related stories, and asks an AI model to pick the most important ones. The result goes up as a public daily post on this repository, and GitHub emails it to everyone watching.
+
+## FAQ
+
+- **Do I need to be technical?** No. If you can tick a checkbox, you can subscribe.
+- **Why GitHub instead of a newsletter?** There's no mailing list and no tracking — GitHub's own notification system delivers the email, and every past digest stays publicly readable.
+- **Who picks the stories?** An AI model ranks each day's headlines. The source list is public in [`feeds.json`](feeds.json), so you can see exactly where the news comes from.
+- **Can I suggest a source?** Yes — open an issue with the feed you'd like added.
 
 ## For developers
+
+[![Daily Biotech News Digest](https://github.com/ActioBio/bio-news-agent/actions/workflows/digest.yml/badge.svg)](https://github.com/ActioBio/bio-news-agent/actions/workflows/digest.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 - [docs/development.md](docs/development.md) — setup, agent-driven mode, feed configuration
 - [docs/architecture.md](docs/architecture.md) — pipeline diagrams and design notes
