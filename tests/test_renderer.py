@@ -141,6 +141,56 @@ class TestToMarkdown:
         assert "This should stay hidden." not in result
         assert "- [Compact Bio Story](https://example.com/1) — Source A (2 sources)" in result
 
+    def test_renders_summary_line_under_top_story_only(self):
+        items = [
+            {
+                "title": "Top Bio Story",
+                "link": "https://example.com/top",
+                "source": "Source A",
+                "category": "Company News",
+                "summary_line": "Why this top story matters.",
+                "_prompt_id": "item-1",
+                "published": datetime(2024, 1, 2, tzinfo=timezone.utc),
+            },
+            {
+                "title": "Regular Bio Story",
+                "link": "https://example.com/regular",
+                "source": "Source B",
+                "category": "Company News",
+                "summary_line": "Category summary stays hidden.",
+                "_prompt_id": "item-2",
+                "published": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            },
+        ]
+
+        result = to_markdown(items, top_stories=["item-1"])
+
+        assert (
+            "- **[Top Bio Story](https://example.com/top)** — Source A<br>\n"
+            "  Why this top story matters." in result
+        )
+        assert "Category summary stays hidden." not in result
+
+    def test_top_story_without_summary_line_stays_compact(self):
+        items = [
+            {
+                "title": "Top Bio Story",
+                "link": "https://example.com/top",
+                "source": "Source A",
+                "category": "Company News",
+                "_prompt_id": "item-1",
+                "published": datetime(2024, 1, 1, tzinfo=timezone.utc),
+            },
+        ]
+
+        result = to_markdown(items, top_stories=["item-1"])
+
+        assert result == (
+            "## Daily Biotech / Pharma Headlines\n\n"
+            "### Top Stories\n"
+            "- **[Top Bio Story](https://example.com/top)** — Source A\n"
+        )
+
     def test_does_not_repeat_top_story_in_category_sections(self):
         items = [
             {

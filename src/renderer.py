@@ -41,7 +41,12 @@ def to_markdown(
             top_story_ids = {str(item.get("_prompt_id", "")) for item in resolved}
             lines.append("### Top Stories")
             for item in resolved:
-                lines.append(_render_item_line(item, bold=True))
+                summary_line = str(item.get("summary_line", "")).strip()
+                if summary_line:
+                    lines.append(f"{_render_item_line(item, bold=True)}<br>")
+                    lines.append(f"  {summary_line}")
+                else:
+                    lines.append(_render_item_line(item, bold=True))
             lines.append("")
 
     sections: dict[str, list[ResolvedItem]] = defaultdict(list)

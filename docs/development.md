@@ -62,7 +62,7 @@ Agent decisions should use this JSON shape:
 }
 ```
 
-`keep_id` always refers to one item id from a candidate group. Use `off_topic_ids` for items that should not appear in the digest. `executive_summary` and `summary_line` are optional enrichment fields; the renderer keeps top stories and category sections skimmable even when those fields are present.
+`keep_id` always refers to one item id from a candidate group. Use `off_topic_ids` for items that should not appear in the digest. `summary_line` renders as one indented line under each Top Story; category sections stay title-only, and `executive_summary` is not rendered. The published issue title appends the leading top story, e.g. `Biotech / Pharma Headlines - Jun 12: MHRA approves oral GLP-1 for weight loss`, while same-day deduplication matches on the `ai-digest` label and creation date rather than the title.
 
 By default, `Company News` is capped to the top 3 ranked items to keep the daily digest quick to scan.
 
