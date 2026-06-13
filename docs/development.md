@@ -70,6 +70,10 @@ By default, `Company News` is capped to the top 3 ranked items to keep the daily
 
 The collector reads RSS feed URLs from [`feeds.json`](../feeds.json). The file contains a JSON object where each key is a feed URL and each value specifies the `category` and human-readable `source` name.
 
+RSS fetches use `RSS_USER_AGENT` first. If a feed returns HTTP 403, the collector retries
+that request with `RSS_FALLBACK_USER_AGENT` because some feed CDNs reject non-browser
+user agents.
+
 Optional fields:
 
 - `type`: source-specific handling such as paper limits

@@ -61,7 +61,18 @@ RSS_TIMEOUT: int = _get_env_int("RSS_TIMEOUT", 10)
 RSS_RETRIES: int = _get_env_int("RSS_RETRIES", 2)
 RSS_MAX_WORKERS: int = _get_env_int("RSS_MAX_WORKERS", 8)
 RSS_MAX_FEED_BYTES: int = _get_env_int("RSS_MAX_FEED_BYTES", 5_000_000)
-RSS_USER_AGENT: str = "bio-news-agent/1.0 (+https://github.com/bio-news-agent)"
+RSS_USER_AGENT: str = _get_env_str(
+    "RSS_USER_AGENT",
+    "bio-news-agent/1.0 (+https://github.com/bio-news-agent)",
+)
+RSS_FALLBACK_USER_AGENT: str = _get_env_str(
+    "RSS_FALLBACK_USER_AGENT",
+    (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Safari/537.36"
+    ),
+)
 
 # ── Categories ───────────────────────────────────────────────────
 CATEGORIES: list[str] = [

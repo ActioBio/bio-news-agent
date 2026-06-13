@@ -1,7 +1,7 @@
 """Tests for collector module."""
 
 from datetime import datetime, timezone
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 import collector
 from collector import normalize_url
@@ -307,3 +307,34 @@ def test_collect_items_with_stats_tracks_feed_health(monkeypatch):
         "items_collected": 1,
         "feed_errors": [{"source": "Bad Feed", "error": "<urlopen error feed down>"}],
     }
+
+
+def test_fetch_with_retry_uses_fallback_headers_after_403(monkeypatch):
+    class FakeResponse:
+        headers = {"Content-Type": "application/rss+xml"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def read(self, _limit: int) -> bytes:
+            return b"<rss><channel><title>Example</title></channel></rss>"
+
+    requests = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(request)
+        if len(requests) == 1:
+            raise HTTPError(request.full_url, 403, "Forbidden", {}, None)
+        return FakeResponse()
+
+    monkeypatch.setattr(collector, "urlopen", fake_urlopen)
+
+    parsed = collector._fetch_with_retry("https://endpoints.news/feed/")
+
+    assert parsed.feed.title == "Example"
+    assert len(requests) == 2
+    assert requests[0].get_header("User-agent") == collector.RSS_USER_AGENT
+    assert requests[1].get_header("User-agent") == collector.RSS_FALLBACK_USER_AGENT

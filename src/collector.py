@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, TypedDict, cast
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
@@ -25,6 +25,7 @@ try:
     from config import (
         RSS_MAX_FEED_BYTES,
         RSS_MAX_WORKERS,
+        RSS_FALLBACK_USER_AGENT,
         RSS_RETRIES,
         RSS_TIMEOUT,
         RSS_USER_AGENT,
@@ -35,6 +36,7 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
     from .config import (
         RSS_MAX_FEED_BYTES,
         RSS_MAX_WORKERS,
+        RSS_FALLBACK_USER_AGENT,
         RSS_RETRIES,
         RSS_TIMEOUT,
         RSS_USER_AGENT,
@@ -60,6 +62,9 @@ _TRACKING_PARAMS = frozenset(
         "mc_cid",
         "mc_eid",
     ]
+)
+_RSS_ACCEPT_HEADER = (
+    "application/rss+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.7"
 )
 
 
@@ -173,16 +178,15 @@ def _log_retry(retry_state) -> None:
     logger.warning("Fetch attempt %s failed, retrying: %s", retry_state.attempt_number, exc)
 
 
-@retry(
-    stop=stop_after_attempt(RSS_RETRIES + 1),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception_type((URLError, TimeoutError)),
-    before_sleep=_log_retry,
-    reraise=True,
-)
-def _fetch_with_retry(url: str) -> feedparser.FeedParserDict:
-    """Fetch RSS feed with retry logic and request timeout."""
-    request = Request(url, headers={"User-Agent": RSS_USER_AGENT})
+def _feed_request_headers(user_agent: str) -> dict[str, str]:
+    return {
+        "User-Agent": user_agent,
+        "Accept": _RSS_ACCEPT_HEADER,
+    }
+
+
+def _read_feed_payload(url: str, headers: dict[str, str]) -> tuple[bytes, dict[str, str]]:
+    request = Request(url, headers=headers)
     with urlopen(request, timeout=RSS_TIMEOUT) as response:
         payload = response.read(RSS_MAX_FEED_BYTES + 1)
         if len(payload) > RSS_MAX_FEED_BYTES:
@@ -193,6 +197,31 @@ def _fetch_with_retry(url: str) -> feedparser.FeedParserDict:
             header.lower(): value for header, value in response.headers.items()
         }
         response_headers.setdefault("content-type", "application/rss+xml")
+    return payload, response_headers
+
+
+@retry(
+    stop=stop_after_attempt(RSS_RETRIES + 1),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type((URLError, TimeoutError)),
+    before_sleep=_log_retry,
+    reraise=True,
+)
+def _fetch_with_retry(url: str) -> feedparser.FeedParserDict:
+    """Fetch RSS feed with retry logic and request timeout."""
+    try:
+        payload, response_headers = _read_feed_payload(
+            url,
+            _feed_request_headers(RSS_USER_AGENT),
+        )
+    except HTTPError as exc:
+        if exc.code != 403:
+            raise
+        logger.info("Feed returned HTTP 403 for %s; retrying with fallback headers", url)
+        payload, response_headers = _read_feed_payload(
+            url,
+            _feed_request_headers(RSS_FALLBACK_USER_AGENT),
+        )
     return feedparser.parse(payload, response_headers=response_headers)
 
 
