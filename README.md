@@ -14,8 +14,6 @@ Delivery is handled by GitHub's built-in notifications — free, no newsletter s
 
 Normally that's one email per day — the digest itself. To stop, open the same page and choose **Unwatch**. If nothing arrives, check that email is enabled in your [notification settings](https://github.com/settings/notifications).
 
-> **Watch, don't star.** Starring bookmarks the repository but doesn't subscribe you to anything — only watching (steps above) delivers the digest.
-
 ## What it looks like
 
 <img src="docs/images/digest-email-preview.svg" alt="Example of the daily digest email: top stories and topic sections with linked headlines" width="680">
