@@ -26,7 +26,7 @@ From the **June 12, 2026** digest:
 - **[Novartis reports Avidity dystrophy data](https://www.biospace.com/drug-development/novartis-12b-avidity-buy-pays-dividends-with-phase-1-2-muscular-dystrophy-win)** — BioSpace Drug Development
 - **[WuXi AppTec sues Pentagon](https://endpoints.news/wuxi-apptec-sues-pentagon-in-challenge-over-inclusion-on-chinese-military-list/)** — Endpoints News
 
-Each digest leads with the day's top stories, then groups the rest by topic — Regulatory & FDA, Clinical & Research, Deals & Finance, Company News — so you can skim straight to what interests you.
+Each digest leads with a compact list of top stories, then groups the rest by topic — Regulatory & FDA, Clinical & Research, Deals & Finance, Company News — so you can skim straight to what interests you.
 
 ## How it works
 

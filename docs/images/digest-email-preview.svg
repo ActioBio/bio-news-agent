@@ -16,18 +16,15 @@
 
     <text x="48" y="164" font-size="13.5" font-weight="700" fill="#1f2328">Top Stories</text>
     <text x="56" y="190" font-size="13" fill="#0969da" font-weight="600">•  MHRA approves oral GLP-1 for weight loss<tspan fill="#59636e" font-weight="400"> — MHRA</tspan></text>
-    <text x="68" y="210" font-size="12.5" fill="#59636e">The UK approval expands semaglutide weight-management options beyond injectable</text>
-    <text x="68" y="227" font-size="12.5" fill="#59636e">formulations.</text>
-    <text x="56" y="253" font-size="13" fill="#0969da" font-weight="600">•  Amgen adds Duke analysis for Tavneos<tspan fill="#59636e" font-weight="400"> — BioSpace Business</tspan></text>
-    <text x="68" y="273" font-size="12.5" fill="#59636e">Independent review may shape whether Tavneos can withstand FDA pressure for</text>
-    <text x="68" y="290" font-size="12.5" fill="#59636e">withdrawal.</text>
+    <text x="56" y="216" font-size="13" fill="#0969da" font-weight="600">•  Novartis reports Avidity dystrophy data<tspan fill="#59636e" font-weight="400"> — BioSpace Drug Development</tspan></text>
+    <text x="56" y="242" font-size="13" fill="#0969da" font-weight="600">•  WuXi AppTec sues Pentagon<tspan fill="#59636e" font-weight="400"> — Endpoints News</tspan></text>
 
-    <text x="48" y="328" font-size="13.5" font-weight="700" fill="#1f2328">Regulatory &amp; FDA</text>
-    <text x="56" y="354" font-size="13" fill="#0969da">•  MHRA clears lower-dose nasal adrenaline<tspan fill="#59636e"> — MHRA</tspan></text>
-    <text x="56" y="378" font-size="13" fill="#0969da">•  FDA flags Dabur plant GMP failures<tspan fill="#59636e"> — BioSpace Business</tspan></text>
+    <text x="48" y="292" font-size="13.5" font-weight="700" fill="#1f2328">Regulatory &amp; FDA</text>
+    <text x="56" y="318" font-size="13" fill="#0969da">•  MHRA clears lower-dose nasal adrenaline<tspan fill="#59636e"> — MHRA</tspan></text>
+    <text x="56" y="342" font-size="13" fill="#0969da">•  FDA flags Dabur plant GMP failures<tspan fill="#59636e"> — BioSpace Business</tspan></text>
 
-    <text x="48" y="416" font-size="13.5" font-weight="700" fill="#1f2328">Clinical &amp; Research</text>
-    <text x="56" y="442" font-size="13" fill="#0969da">•  Novartis reports Avidity dystrophy data<tspan fill="#59636e"> — BioSpace Drug Development</tspan></text>
+    <text x="48" y="394" font-size="13.5" font-weight="700" fill="#1f2328">Deals &amp; Finance</text>
+    <text x="56" y="420" font-size="13" fill="#0969da">•  VC firm backs RNA startup<tspan fill="#59636e"> — BioPharma Dive</tspan></text>
 
     <rect x="22" y="360" width="676" height="92" rx="11" fill="url(#fade)"/>
   </g>

@@ -141,7 +141,7 @@ class TestToMarkdown:
         assert "This should stay hidden." not in result
         assert "- [Compact Bio Story](https://example.com/1) — Source A (2 sources)" in result
 
-    def test_renders_summary_line_under_top_story_only(self):
+    def test_hides_summary_line_for_top_stories(self):
         items = [
             {
                 "title": "Top Bio Story",
@@ -165,10 +165,8 @@ class TestToMarkdown:
 
         result = to_markdown(items, top_stories=["item-1"])
 
-        assert (
-            "- **[Top Bio Story](https://example.com/top)** — Source A<br>\n"
-            "  Why this top story matters." in result
-        )
+        assert "- **[Top Bio Story](https://example.com/top)** — Source A" in result
+        assert "Why this top story matters." not in result
         assert "Category summary stays hidden." not in result
 
     def test_top_story_without_summary_line_stays_compact(self):
