@@ -27,7 +27,7 @@ Every day, an automated workflow reads the headlines published by the sources in
 
 ## For developers
 
-[![Daily Biotech News Digest](https://github.com/ActioBio/bio-news-agent/actions/workflows/digest.yml/badge.svg)](https://github.com/ActioBio/bio-news-agent/actions/workflows/digest.yml)
+[![Publish Biotech Digest Issue](https://github.com/ActioBio/bio-news-agent/actions/workflows/publish-digest.yml/badge.svg)](https://github.com/ActioBio/bio-news-agent/actions/workflows/publish-digest.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 - [docs/development.md](docs/development.md) — setup, agent-driven mode, feed configuration

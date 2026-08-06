@@ -5,8 +5,6 @@ permissions:
   issues: write 
 
 on:
-  schedule:
-    - cron: "0 17 * * *"        # 12:00 EST / 13:00 EDT (America/New_York)
   workflow_dispatch:
 
 jobs:

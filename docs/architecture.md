@@ -5,7 +5,7 @@
 ```mermaid
 flowchart LR
     subgraph Trigger[Triggers]
-        GH[GitHub Actions<br/>schedule or manual dispatch]
+        GH[GitHub Actions<br/>manual dispatch]
         AGENT[Codex / Claude Code<br/>automation]
         LOCAL[Local CLI run<br/>UV_CACHE_DIR=.uv-cache uv run python src/main.py]
     end
