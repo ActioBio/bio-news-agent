@@ -210,6 +210,40 @@ def test_check_issue_status_reports_missing_issue(monkeypatch):
     }
 
 
+def test_issue_created_today_uses_eastern_day_for_delayed_run(monkeypatch):
+    monkeypatch.setattr(
+        publisher,
+        "_utcnow",
+        lambda: datetime(2026, 8, 28, 1, 15, tzinfo=timezone.utc),
+    )
+
+    assert publisher._issue_created_today(
+        {"createdAt": "2026-08-27T15:05:21Z"}
+    )
+
+
+def test_issue_created_today_rejects_previous_eastern_day_after_midnight(monkeypatch):
+    monkeypatch.setattr(
+        publisher,
+        "_utcnow",
+        lambda: datetime(2026, 8, 28, 4, 1, tzinfo=timezone.utc),
+    )
+
+    assert not publisher._issue_created_today(
+        {"createdAt": "2026-08-28T03:59:00Z"}
+    )
+
+
+def test_today_title_base_uses_eastern_day(monkeypatch):
+    monkeypatch.setattr(
+        publisher,
+        "_utcnow",
+        lambda: datetime(2026, 8, 28, 1, 15, tzinfo=timezone.utc),
+    )
+
+    assert publisher._today_title_base() == "Biotech / Pharma Headlines - Aug 27"
+
+
 def test_publish_issue_creates_new_issue(tmp_path, monkeypatch):
     news_file = tmp_path / "news.md"
     news_file.write_text("hello world", encoding="utf-8")
