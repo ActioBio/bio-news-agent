@@ -27,7 +27,7 @@ flowchart LR
         FEEDS[feeds.json]
         RSS[RSS feed endpoints]
         CONF[.env + config.py]
-        OAI[OpenAI API<br/>GitHub fallback]
+        OAI[OpenAI API<br/>manual graph path]
         MODEL[Codex / Claude model<br/>agent mode]
     end
 
@@ -37,7 +37,7 @@ flowchart LR
         ISSUE[GitHub Issue<br/>label: ai-digest]
     end
 
-    GH --> CHECK --> C
+    GH --> C
     AGENT --> CHECK
     LOCAL --> C
     FEEDS --> C
@@ -59,12 +59,12 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    GH[GitHub Actions] --> T{Today's issue<br/>already open?}
+    GH[GitHub Actions<br/>manual digest] --> C[Collect + filter + build candidate groups]
     AGENT[Codex / Claude] --> T
     T -- Yes --> S[Stop]
-    T -- No --> C[Collect + filter + build candidate groups]
+    T -- No --> C
     C --> P{Path}
-    P -- GitHub Actions --> K1{OPENAI_API_KEY available?}
+    P -- GitHub manual --> K1{OPENAI_API_KEY available?}
     K1 -- Yes --> L[OpenAI dedupe + categorize]
     K1 -- No --> R[Local duplicate resolution + fallback categorization]
     P -- Codex / Claude --> X[Write digest-candidates.json]
@@ -92,5 +92,6 @@ flowchart LR
 - LLM request timeouts retry before falling back to local duplicate resolution.
 - The LLM receives candidate groups and returns structured duplicate clusters.
 - `--dispatch-publish` triggers `.github/workflows/publish-digest.yml` with a compressed digest payload; that workflow runs the repo-local `--publish-issue` path on GitHub Actions.
+- `.github/workflows/digest.yml` is manual-only. Manual dispatch skips its schedule-only preflight, runs the API graph, and rechecks the issue idempotently only when publishing.
 - Direct `--publish-issue` remains a manual fallback.
 - Short display titles are generated only for kept items after duplicates are resolved.

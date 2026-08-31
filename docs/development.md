@@ -15,6 +15,8 @@ UV_CACHE_DIR=.uv-cache uv run python src/main.py
 
 Add `OPENAI_API_KEY` to `.env` if you want the default graph path to use OpenAI directly. Placeholder values such as `sk-...` or `your_api_key_here` are treated as missing.
 
+The default API model is `gpt-5.6-luna`. Set `OPENAI_MODEL` to override it.
+
 ## Agent-Driven Mode
 
 This path keeps feed collection and filtering in Python, then lets Codex or Claude Code write editorial decisions without needing `OPENAI_API_KEY`.
@@ -94,4 +96,4 @@ Optional fields:
 
 ## CI
 
-Push and pull request CI runs `pytest` and `mypy`. Scheduled agent runs generate locally and dispatch the final publish through GitHub Actions so the final issue author is `app/github-actions`.
+Push and pull request CI runs `pytest` and `mypy`. Scheduled agent runs generate locally and dispatch the final publish through GitHub Actions so the final issue author is `app/github-actions`. Publisher issue matching and generated title dates use `America/New_York`, so a delayed run does not shift the digest to the wrong calendar day.

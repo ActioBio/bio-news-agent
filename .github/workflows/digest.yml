@@ -26,7 +26,12 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const today = new Date().toISOString().slice(0,10);
+            // Keep this aligned with src/publisher.py's America/New_York issue-date rule.
+            const digestDate = value =>
+              new Date(value).toLocaleDateString('en-CA', {
+                timeZone: 'America/New_York'
+              });
+            const today = digestDate(new Date());
             const query = `
               query($owner: String!, $repo: String!, $cursor: String) {
                 repository(owner: $owner, name: $repo) {
@@ -61,7 +66,7 @@ jobs:
               });
               const issues = result.repository.issues;
               existing = issues.nodes.find(issue =>
-                issue.createdAt.slice(0, 10) === today &&
+                digestDate(issue.createdAt) === today &&
                 issue.labels.nodes.some(label => label.name === 'ai-digest')
               );
               cursor = issues.pageInfo.endCursor;

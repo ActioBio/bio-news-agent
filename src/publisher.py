@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal, TypeVar, TypedDict
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 try:
     from config import (
@@ -40,6 +41,8 @@ _MAX_ISSUE_BODY_CHARS = 65_000
 _MAX_TITLE_STORY_CHARS = 100
 _MONTH_ABBREVS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 _TOP_STORY_LINE_PATTERN = re.compile(r"^- \*\*\[(.+?)\]\(", re.MULTILINE)
+# Keep this aligned with the issue-date rule in .github/workflows/digest.yml.
+_DIGEST_TIME_ZONE = ZoneInfo("America/New_York")
 _OPEN_ISSUES_QUERY = """
 query($owner: String!, $repo: String!, $cursor: String) {
   repository(owner: $owner, name: $repo) {
@@ -144,8 +147,12 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _digest_now() -> datetime:
+    return _utcnow().astimezone(_DIGEST_TIME_ZONE)
+
+
 def _today_title_base() -> str:
-    now = _utcnow()
+    now = _digest_now()
     return f"{DIGEST_ISSUE_TITLE_PREFIX} - {_MONTH_ABBREVS[now.month - 1]} {now.day}"
 
 
@@ -469,7 +476,13 @@ def check_issue_status() -> IssueStatusResult:
 
 def _issue_created_today(issue: dict[str, Any]) -> bool:
     created_at = str(issue.get("createdAt", ""))
-    return created_at[:10] == _utcnow().date().isoformat()
+    try:
+        created = datetime.fromisoformat(created_at)
+    except ValueError:
+        return False
+    if created.tzinfo is None:
+        return False
+    return created.astimezone(_DIGEST_TIME_ZONE).date() == _digest_now().date()
 
 
 def _issue_has_label(issue: dict[str, Any], label_name: str) -> bool:
