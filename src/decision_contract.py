@@ -80,7 +80,10 @@ def validate_candidate_envelope(
 
 
 def validate_decision_envelope(
-    payload: dict[str, Any], *, expected_kind: str, expected_snapshot_id: str
+    payload: dict[str, Any],
+    *,
+    expected_kind: str,
+    expected_snapshot_id: str,
 ) -> None:
     if payload.get("schema_version") != DECISION_SCHEMA_VERSION:
         raise ValueError(f"Decision schema version must be {DECISION_SCHEMA_VERSION}")
@@ -91,7 +94,8 @@ def validate_decision_envelope(
 
 
 def validate_dispositions(
-    expected_group_item_ids: dict[str, set[str]], response_groups: Any
+    expected_group_item_ids: dict[str, set[str]],
+    response_groups: Any,
 ) -> None:
     if not isinstance(response_groups, list):
         raise ValueError("Decision response missing groups list")
