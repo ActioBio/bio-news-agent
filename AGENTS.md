@@ -36,6 +36,11 @@
 
 ## Decision Shape
 - For the full input contract, inspect the current `digest-candidates.json` and the decision-schema section in [docs/development.md](docs/development.md). `keep_id` always refers to one item id from a candidate group.
+- Copy candidate `snapshot_id` exactly into decisions schema v2 with kind `bio-news-agent.decisions`.
+- Include every candidate group exactly once and disposition every item exactly once as keep, duplicate, or off-topic.
+- Represent every distinct kept item, including `discovery_only`, as an explicit singleton cluster with `duplicate_ids: []`.
+- `--apply-decisions` invalidates any existing `news.md` before validation. If it exits nonzero, stop and do not run `--dispatch-publish`.
+- If binding or exhaustive validation fails, stop before dispatch; never repair the decisions with local passthrough.
 - `clusters`: duplicate groups with `keep_id` and `duplicate_ids`
 - `top_stories`
 - `executive_summary`

@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "kind": "bio-news-agent.candidates",
   "categories": [
     "Regulatory & FDA",
@@ -62,5 +62,6 @@
         }
       ]
     }
-  ]
+  ],
+  "snapshot_id": "sha256:189f922463341456412f67ed8def13d4faa8beb37399f5f7aece94d15685b4ef"
 }

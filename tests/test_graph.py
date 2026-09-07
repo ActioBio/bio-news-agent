@@ -6,6 +6,8 @@ from pathlib import Path
 
 import httpx
 import graph
+import pytest
+from decision_contract import build_candidate_envelope, validate_candidate_envelope
 from graph import (
     _build_candidate_groups,
     _is_high_confidence_duplicate,
@@ -58,6 +60,24 @@ def _item(
         "source_type": source_type,
         "source_role": source_role,
         "feed_mode": feed_mode,
+    }
+
+
+def _candidate_v5(items):
+    legacy = build_candidate_snapshot(items)
+    return build_candidate_envelope(
+        kind="bio-news-agent.candidates",
+        categories=legacy["categories"],
+        groups=legacy["groups"],
+    )
+
+
+def _bound_decisions(snapshot, groups):
+    return {
+        "schema_version": 2,
+        "kind": "bio-news-agent.decisions",
+        "snapshot_id": snapshot["snapshot_id"],
+        "groups": groups,
     }
 
 
@@ -208,6 +228,16 @@ def test_build_candidate_snapshot_preserves_group_ids():
     assert snapshot["groups"][0]["group_id"] == "g1"
     assert [item["item_id"] for item in snapshot["groups"][0]["items"]] == ["g1i1", "g1i2"]
     assert snapshot["groups"][0]["items"][0]["link"] == "https://example.com/a"
+
+
+def test_build_candidate_snapshot_emits_bound_v5_envelope():
+    snapshot = build_candidate_snapshot([_item("a", "A distinct biotech story", 12)])
+
+    assert snapshot["schema_version"] == 5
+    validate_candidate_envelope(
+        snapshot,
+        expected_kind="bio-news-agent.candidates",
+    )
 
 
 def test_build_candidate_snapshot_matches_contract_fixture():
@@ -1011,14 +1041,18 @@ def test_apply_decisions_file_renders_from_candidate_snapshot(tmp_path, monkeypa
     candidates_file = tmp_path / "digest-candidates.json"
     decisions_file = tmp_path / "digest-decisions.json"
     output_file = tmp_path / "news.md"
+    snapshot = build_candidate_snapshot(items)
 
     candidates_file.write_text(
-        json.dumps(build_candidate_snapshot(items)),
+        json.dumps(snapshot),
         encoding="utf-8",
     )
     decisions_file.write_text(
         json.dumps(
             {
+                "schema_version": 2,
+                "kind": "bio-news-agent.decisions",
+                "snapshot_id": snapshot["snapshot_id"],
                 "groups": [
                     {
                         "group_id": "g1",
@@ -1079,8 +1113,7 @@ def test_apply_decisions_file_matches_contract_fixtures(tmp_path, monkeypatch):
     assert output_file.read_text(encoding="utf-8") == result["markdown"]
 
 
-def test_apply_decisions_backward_compat_old_format(tmp_path, monkeypatch):
-    """Old-format decisions without new fields should still work with defaults."""
+def test_apply_decisions_rejects_unbound_old_format(tmp_path, monkeypatch):
     candidates_file = tmp_path / "digest-candidates.json"
     decisions_file = tmp_path / "digest-decisions.json"
     output_file = tmp_path / "news.md"
@@ -1089,25 +1122,40 @@ def test_apply_decisions_backward_compat_old_format(tmp_path, monkeypatch):
         json.dumps(_load_fixture("candidate_snapshot.json")),
         encoding="utf-8",
     )
+    decisions_file.write_text(json.dumps({"groups": []}), encoding="utf-8")
+    monkeypatch.setattr(graph, "_NEWS_FILE", output_file)
+
+    with pytest.raises(ValueError, match="schema version"):
+        apply_decisions_file(decisions_file, candidates_file)
+
+    assert not output_file.exists()
+
+
+def test_apply_decisions_v2_preserves_optional_field_fallbacks(tmp_path, monkeypatch):
+    snapshot = _load_fixture("candidate_snapshot.json")
+    candidates_file = tmp_path / "digest-candidates.json"
+    decisions_file = tmp_path / "digest-decisions.json"
+    output_file = tmp_path / "news.md"
+    candidates_file.write_text(json.dumps(snapshot), encoding="utf-8")
     decisions_file.write_text(
-        json.dumps(
-            {
-                "groups": [
-                    {
-                        "group_id": "g1",
-                        "off_topic_ids": [],
-                        "clusters": [
-                            {
-                                "keep_id": "g1i1",
-                                "duplicate_ids": ["g1i2"],
-                                "category": "Clinical & Research",
-                                "short_title": "Pfizer posts oncology trial results",
-                            }
-                        ],
-                    },
-                ]
-            }
-        ),
+        json.dumps({
+            "schema_version": 2,
+            "kind": "bio-news-agent.decisions",
+            "snapshot_id": snapshot["snapshot_id"],
+            "groups": [
+                {
+                    "group_id": "g1",
+                    "off_topic_ids": [],
+                    "clusters": [{
+                        "keep_id": "g1i1",
+                        "duplicate_ids": ["g1i2"],
+                        "category": "Clinical & Research",
+                        "short_title": "Pfizer posts oncology trial results",
+                    }],
+                },
+                {"group_id": "g2", "off_topic_ids": ["g2i1"], "clusters": []},
+            ],
+        }),
         encoding="utf-8",
     )
     monkeypatch.setattr(graph, "_NEWS_FILE", output_file)
@@ -1119,6 +1167,90 @@ def test_apply_decisions_backward_compat_old_format(tmp_path, monkeypatch):
     assert result["items"][0]["coverage_sources"] == ["Endpoints News"]
     assert result.get("executive_summary") == ""
     assert result.get("top_stories") == ["g1i1"]
+
+
+def test_apply_decisions_file_rejects_unbound_legacy_decisions(tmp_path, monkeypatch):
+    snapshot = _candidate_v5([_item("a", "A distinct biotech story", 12)])
+    candidates_file = tmp_path / "digest-candidates.json"
+    decisions_file = tmp_path / "digest-decisions.json"
+    output_file = tmp_path / "news.md"
+    candidates_file.write_text(json.dumps(snapshot), encoding="utf-8")
+    decisions_file.write_text(json.dumps({"groups": []}), encoding="utf-8")
+    output_file.write_text("stale digest", encoding="utf-8")
+    monkeypatch.setattr(graph, "_NEWS_FILE", output_file)
+
+    with pytest.raises(ValueError, match="schema version"):
+        apply_decisions_file(decisions_file, candidates_file)
+
+    assert not output_file.exists()
+
+
+def test_apply_decisions_file_rejects_missing_groups_without_rendering(tmp_path, monkeypatch):
+    snapshot = _candidate_v5([_item("a", "A distinct biotech story", 12)])
+    candidates_file = tmp_path / "digest-candidates.json"
+    decisions_file = tmp_path / "digest-decisions.json"
+    output_file = tmp_path / "news.md"
+    candidates_file.write_text(json.dumps(snapshot), encoding="utf-8")
+    decisions_file.write_text(json.dumps(_bound_decisions(snapshot, [])), encoding="utf-8")
+    monkeypatch.setattr(graph, "_NEWS_FILE", output_file)
+
+    with pytest.raises(ValueError, match="Missing decision groups"):
+        apply_decisions_file(decisions_file, candidates_file)
+
+    assert not output_file.exists()
+
+
+def test_apply_structured_response_accepts_discovery_singleton_then_filters_it():
+    groups = [[_item(
+        "a",
+        "Discovery-only biotech story",
+        12,
+        feed_mode="discovery_only",
+    )]]
+    response = {
+        "groups": [{
+            "group_id": "g1",
+            "off_topic_ids": [],
+            "clusters": [{
+                "keep_id": "g1i1",
+                "duplicate_ids": [],
+                "category": "Clinical & Research",
+                "short_title": "Discovery-only biotech story",
+            }],
+        }],
+    }
+
+    result = graph._apply_structured_response({}, groups, response, log_label="test")
+
+    assert result["items"] == []
+
+
+def test_invalid_raw_dispositions_fail_before_keep_promotion(monkeypatch):
+    groups = [[
+        _item("a", "Core trial report", 12, feed_mode="core"),
+        _item("b", "Discovery trial report", 11, feed_mode="discovery_only"),
+        _item("c", "Separate regulatory report", 10, feed_mode="core"),
+    ]]
+    response = {
+        "groups": [{
+            "group_id": "g1",
+            "off_topic_ids": [],
+            "clusters": [{"keep_id": "g1i2", "duplicate_ids": ["g1i1"]}],
+        }],
+    }
+    promoted = False
+
+    def record_promotion(*args, **kwargs):
+        nonlocal promoted
+        promoted = True
+        return "g1i1"
+
+    monkeypatch.setattr(graph, "_promote_renderable_keep_id", record_promotion)
+
+    with pytest.raises(ValueError, match="Missing item dispositions"):
+        graph._apply_structured_response({}, groups, response, log_label="test")
+
+    assert not promoted
 
 
 def test_apply_structured_response_uses_duplicate_summary_when_keep_summary_is_blank():

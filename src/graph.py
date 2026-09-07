@@ -43,6 +43,12 @@ try:
         PAPER_LIMIT,
         resolve_repo_output_file,
     )
+    from decision_contract import (
+        build_candidate_envelope,
+        validate_candidate_envelope,
+        validate_decision_envelope,
+        validate_dispositions,
+    )
     from finalize import finalize_items as _finalize_items
     from filterer import deduplicate, exclude_noise
     from item_types import CandidateItem, CollectedItem, EnrichmentItem, ResolvedItem
@@ -70,6 +76,12 @@ except ModuleNotFoundError:  # pragma: no cover - module execution fallback
         PAPER_LIMIT,
         resolve_repo_output_file,
     )
+    from .decision_contract import (
+        build_candidate_envelope,
+        validate_candidate_envelope,
+        validate_decision_envelope,
+        validate_dispositions,
+    )
     from .finalize import finalize_items as _finalize_items
     from .filterer import deduplicate, exclude_noise
     from .item_types import CandidateItem, CollectedItem, EnrichmentItem, ResolvedItem
@@ -96,7 +108,8 @@ _SUMMARY_ABBREVIATION_PATTERN = re.compile(
 )
 
 _NEWS_FILE = resolve_repo_output_file(DIGEST_OUTPUT_FILE)
-_CANDIDATE_SNAPSHOT_VERSION = 4
+_CANDIDATE_KIND = "bio-news-agent.candidates"
+_DECISION_KIND = "bio-news-agent.decisions"
 _MAX_PROMPT_SUMMARY_CHARS = 280
 _SHORT_TITLE_MAX_WORDS = 8
 _DUPLICATE_STOP_WORDS = {
@@ -617,12 +630,14 @@ def _build_dedupe_prompt_groups(
 
 def build_candidate_snapshot(items: list[CollectedItem]) -> dict[str, Any]:
     groups = _build_candidate_groups(items)
-    return {
-        "schema_version": _CANDIDATE_SNAPSHOT_VERSION,
-        "kind": "bio-news-agent.candidates",
-        "categories": list(CATEGORIES),
-        "groups": _build_candidate_snapshot_groups(groups),
-    }
+    return cast(
+        dict[str, Any],
+        build_candidate_envelope(
+            kind=_CANDIDATE_KIND,
+            categories=list(CATEGORIES),
+            groups=_build_candidate_snapshot_groups(groups),
+        ),
+    )
 
 
 def _deserialize_candidate_item(item_payload: dict[str, Any]) -> CollectedItem:
@@ -1075,6 +1090,12 @@ def _apply_structured_response(
     if not isinstance(response_groups, list):
         raise ValueError("LLM response missing groups list")
 
+    expected_group_item_ids = {
+        f"g{group_index}": set(_build_group_prompt_ids(f"g{group_index}", group))
+        for group_index, group in enumerate(groups, start=1)
+    }
+    validate_dispositions(expected_group_item_ids, response_groups)
+
     executive_summary = str(response_payload.get("executive_summary", "")).strip()
     raw_top_stories = response_payload.get("top_stories", [])
     if not isinstance(raw_top_stories, list):
@@ -1121,7 +1142,7 @@ def _apply_structured_response(
                 used_ids,
             )
             if resolved_cluster is None:
-                continue
+                raise RuntimeError("Validated decision cluster could not be resolved")
 
             requested_keep_id = resolved_cluster["requested_keep_id"]
             keep_id = resolved_cluster["keep_id"]
@@ -1155,10 +1176,8 @@ def _apply_structured_response(
             used_ids.update(cluster_member_ids)
             skipped_items += len(cluster_member_ids)
 
-        for prompt_id, item in group_prompt_ids.items():
-            if prompt_id in used_ids:
-                continue
-            kept_items.append(_seed_resolved_item(item, prompt_id))
+        if used_ids != set(group_prompt_ids):
+            raise RuntimeError(f"Validated dispositions were not fully applied for {group_id}")
 
     state["executive_summary"] = executive_summary
     state["top_stories"] = [top_story_aliases.get(story_id, story_id) for story_id in top_story_ids]
@@ -1254,14 +1273,24 @@ def apply_decisions_file(
     decisions_path: Path,
     candidates_path: Path,
 ) -> DigestState:
+    _NEWS_FILE.unlink(missing_ok=True)
     snapshot_payload = json.loads(candidates_path.read_text(encoding="utf-8"))
     if not isinstance(snapshot_payload, dict):
         raise ValueError("Candidate snapshot must be a JSON object")
+    snapshot_id = validate_candidate_envelope(
+        snapshot_payload,
+        expected_kind=_CANDIDATE_KIND,
+    )
 
-    groups = _candidate_groups_from_snapshot(snapshot_payload)
     decisions_payload = _extract_json_object(
         decisions_path.read_text(encoding="utf-8")
     )
+    validate_decision_envelope(
+        decisions_payload,
+        expected_kind=_DECISION_KIND,
+        expected_snapshot_id=snapshot_id,
+    )
+    groups = _candidate_groups_from_snapshot(snapshot_payload)
 
     state = _apply_structured_response(
         {},

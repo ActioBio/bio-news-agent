@@ -68,8 +68,10 @@ flowchart LR
     K1 -- Yes --> L[OpenAI dedupe + categorize]
     K1 -- No --> R[Local duplicate resolution + fallback categorization]
     P -- Codex / Claude --> X[Write digest-candidates.json]
-    X --> Y[Agent writes digest-decisions.json]
-    Y --> Z[Apply decisions]
+    X --> Y[Agent writes exhaustive decisions v2]
+    Y --> V{Snapshot binding and dispositions valid?}
+    V -- Yes --> Z[Apply decisions]
+    V -- No --> F[Stop: fail closed, nothing published]
     L --> W[Render + write news.md]
     R --> W
     Z --> W
@@ -83,6 +85,7 @@ flowchart LR
 - Mixed regulator and institutional feeds can be gated by source-specific title or link rules before grouping.
 - The source cap is applied before LLM dedupe for diversity and lower cost.
 - Candidate export writes `digest-run-status.json` with feed health, group counts, and sample `feed_errors` for automation use.
+- Candidate schema v5 binds decisions schema v2 through the exact exported `snapshot_id`. Decisions must include every candidate group and disposition every item exactly once. Validation completes before keep promotion; only afterward does rendering remove standalone `discovery_only` keeps.
 - `--check-issue` writes `digest-issue-status.json`, preferring authenticated `gh` locally and `DIGEST_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `GH_TOKEN` in GitHub Actions.
 - On GitHub failure, the issue-status artifact includes `ok: false`, a `reason`, an `error_kind`, and a `retryable` flag.
 - `--candidates-only` exits nonzero only when feed health is bad enough to make the snapshot unreliable. Empty days are reported as `reason: "no_fresh_items"` without failing, even when optional feeds have warnings.
