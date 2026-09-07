@@ -83,10 +83,10 @@ The empty `groups` skeleton above is valid only for a candidate snapshot with no
         {
           "keep_id": "g2i1",
           "duplicate_ids": ["g2i2"],
-          "category": "Regulatory",
+          "category": "Regulatory & FDA",
           "short_title": "FDA updates gene therapy guidance",
           "summary_line": "Why this matters in one sentence.",
-          "tier": "medium"
+          "tier": "normal"
         }
       ]
     },
@@ -100,6 +100,10 @@ The empty `groups` skeleton above is valid only for a candidate snapshot with no
 ```
 
 Every cluster must contain a list-valued `duplicate_ids`; use `[]` for a kept singleton. A standalone `discovery_only` item is valid decision input and must still be represented as an explicit singleton keep, but it is removed later during rendering. Decisions are fully validated, including snapshot binding and exhaustive dispositions, before any keep is promoted. Failed validation invalidates and removes any prior generated `news.md`, then stops before rendering or dispatch.
+
+Use a canonical category from the candidate snapshot and a `tier` of `high` or `normal`. Optional `short_title` values that are missing, null, non-string, or blank retain the original source title. Valid strings have whitespace normalized and are limited to 8 words. This applies to agent decisions and API enrichment.
+
+The resolved `coverage_sources` list contains additional distinct sources, excluding the kept source. Source labels have leading, trailing, and repeated whitespace normalized and are compared case-insensitively; empty labels are ignored and the first normalized display spelling is preserved. Coverage counts used in rendering, ranking, and API enrichment represent distinct source/newsroom labels, not the number of URLs. Publisher aliases are not merged.
 
 `keep_id` always refers to one item id from a candidate group. Use `off_topic_ids` for items that should not appear in the digest. `summary_line` and `executive_summary` are kept as decision metadata and are not rendered in the issue body. The published issue title appends the leading top story, e.g. `Biotech / Pharma Headlines - Jun 12: MHRA approves oral GLP-1 for weight loss`, while same-day deduplication matches on the `ai-digest` label and creation date rather than the title.
 
