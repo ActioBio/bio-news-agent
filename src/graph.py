@@ -724,7 +724,9 @@ def _extract_json_object(text: str) -> dict[str, Any]:
 
 
 def _clean_short_title(value: Any, fallback: str) -> str:
-    title = " ".join(str(value).split()).strip()
+    if not isinstance(value, str):
+        return fallback
+    title = " ".join(value.split())
     if not title:
         return fallback
 
@@ -814,6 +816,18 @@ def _apply_source_cap(items: list[CollectedItem]) -> tuple[list[CollectedItem], 
     return filtered_items, skipped_items
 
 
+def _normalize_coverage_sources(kept_source: str, duplicate_sources: list[str]) -> list[str]:
+    seen = {" ".join(kept_source.split()).casefold()}
+    coverage_sources: list[str] = []
+    for source in duplicate_sources:
+        source = " ".join(source.split())
+        source_key = source.casefold()
+        if source and source_key not in seen:
+            coverage_sources.append(source)
+            seen.add(source_key)
+    return coverage_sources
+
+
 def _fallback_resolve_groups(
     groups: list[list[CollectedItem]],
     *,
@@ -844,10 +858,10 @@ def _fallback_resolve_groups(
                 )
                 if not existing_item.get("summary_line"):
                     existing_item["summary_line"] = _fallback_summary_line(item)
-                dup_source = str(item.get("source", "")).strip()
-                coverage_sources = existing_item.setdefault("coverage_sources", [])
-                if dup_source and dup_source not in coverage_sources:
-                    coverage_sources.append(dup_source)
+                existing_item["coverage_sources"] = _normalize_coverage_sources(
+                    str(existing_item.get("source", "")),
+                    [*existing_item.get("coverage_sources", []), str(item.get("source", ""))],
+                )
                 continue
 
             item["_prompt_id"] = f"g{group_index}i{item_index}"
@@ -877,11 +891,10 @@ def _seed_resolved_item(
     resolved_item["_prompt_id"] = prompt_id
     resolved_item["summary_line"] = _best_available_summary_line([item, *duplicate_items])
     resolved_item["tier"] = "normal"
-    resolved_item["coverage_sources"] = [
-        str(duplicate_item.get("source", "")).strip()
-        for duplicate_item in duplicate_items
-        if str(duplicate_item.get("source", "")).strip()
-    ]
+    resolved_item["coverage_sources"] = _normalize_coverage_sources(
+        str(item.get("source", "")),
+        [str(duplicate_item.get("source", "")) for duplicate_item in duplicate_items],
+    )
     return resolved_item
 
 
@@ -1164,12 +1177,10 @@ def _apply_structured_response(
             raw_tier = str(cluster.get("tier", "normal")).strip().lower()
             keep_item["tier"] = raw_tier if raw_tier in ("high", "normal") else "normal"
 
-            coverage_sources: list[str] = []
-            for duplicate_item in duplicate_items:
-                dup_source = str(duplicate_item.get("source", "")).strip()
-                if dup_source and dup_source not in coverage_sources:
-                    coverage_sources.append(dup_source)
-            keep_item["coverage_sources"] = coverage_sources
+            keep_item["coverage_sources"] = _normalize_coverage_sources(
+                str(keep_item.get("source", "")),
+                [str(duplicate_item.get("source", "")) for duplicate_item in duplicate_items],
+            )
 
             kept_items.append(keep_item)
             used_ids.add(keep_id)
