@@ -43,26 +43,63 @@ Agent decisions should use this JSON shape:
 
 ```json
 {
+  "schema_version": 2,
+  "kind": "bio-news-agent.decisions",
+  "snapshot_id": "sha256:<copy exactly from digest-candidates.json>",
+  "executive_summary": "2-3 sentence overview of today's biotech/pharma news.",
+  "top_stories": ["g1i1"],
+  "groups": []
+}
+```
+
+The empty `groups` skeleton above is valid only for a candidate snapshot with no groups; it is invalid for every nonempty snapshot. Every candidate group must appear exactly once, and every candidate item must be dispositioned exactly once as a keep, duplicate, or off-topic item. For example, given `g1i1` as a kept singleton, `g2i1` and `g2i2` as duplicate coverage of one story, and `g3i1` as off-topic, the exhaustive decisions are:
+
+```json
+{
+  "schema_version": 2,
+  "kind": "bio-news-agent.decisions",
+  "snapshot_id": "sha256:<copy exactly from digest-candidates.json>",
   "executive_summary": "2-3 sentence overview of today's biotech/pharma news.",
   "top_stories": ["g1i1"],
   "groups": [
     {
       "group_id": "g1",
-      "off_topic_ids": ["g1i3"],
+      "off_topic_ids": [],
       "clusters": [
         {
           "keep_id": "g1i1",
-          "duplicate_ids": ["g1i2"],
+          "duplicate_ids": [],
           "category": "Clinical & Research",
           "short_title": "Pfizer posts oncology trial results",
           "summary_line": "Why this matters in one sentence.",
           "tier": "high"
         }
       ]
+    },
+    {
+      "group_id": "g2",
+      "off_topic_ids": [],
+      "clusters": [
+        {
+          "keep_id": "g2i1",
+          "duplicate_ids": ["g2i2"],
+          "category": "Regulatory",
+          "short_title": "FDA updates gene therapy guidance",
+          "summary_line": "Why this matters in one sentence.",
+          "tier": "medium"
+        }
+      ]
+    },
+    {
+      "group_id": "g3",
+      "off_topic_ids": ["g3i1"],
+      "clusters": []
     }
   ]
 }
 ```
+
+Every cluster must contain a list-valued `duplicate_ids`; use `[]` for a kept singleton. A standalone `discovery_only` item is valid decision input and must still be represented as an explicit singleton keep, but it is removed later during rendering. Decisions are fully validated, including snapshot binding and exhaustive dispositions, before any keep is promoted. Failed validation invalidates and removes any prior generated `news.md`, then stops before rendering or dispatch.
 
 `keep_id` always refers to one item id from a candidate group. Use `off_topic_ids` for items that should not appear in the digest. `summary_line` and `executive_summary` are kept as decision metadata and are not rendered in the issue body. The published issue title appends the leading top story, e.g. `Biotech / Pharma Headlines - Jun 12: MHRA approves oral GLP-1 for weight loss`, while same-day deduplication matches on the `ai-digest` label and creation date rather than the title.
 
