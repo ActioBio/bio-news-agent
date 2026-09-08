@@ -693,6 +693,7 @@ def test_dispatch_publish_workflow_posts_dispatch_payload(tmp_path, monkeypatch)
             {
                 "ref": "main",
                 "inputs": {
+                    "digest_date": "2026-04-13",
                     "issue_title": f"{_BASE_TITLE}: FDA approves first therapy for rare disease",
                     "issue_body_gz_b64": publisher._encode_dispatch_body(_TOP_STORY_BODY),
                 },
