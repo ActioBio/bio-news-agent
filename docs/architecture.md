@@ -84,6 +84,7 @@ flowchart LR
 
 - Exact duplicates are removed by normalized URL before any LLM call.
 - The collector preserves `original_title` and RSS `summary` for duplicate resolution.
+- Local fallback merges only nonempty original headlines equal after case folding and whitespace normalization within an existing candidate group. A usable `title` is used only when the original is absent or unusable. Candidate grouping remains fuzzy, including the broader fallback grouping; numbers, punctuation, word order, negation, and differing originals prevent local merging. More near-duplicates may remain, and identical generic headlines do not prove semantic identity; see the [local fallback contract](development.md#api-response-contract).
 - Source-specific low-signal items such as webinars, sponsored posts, opinion pieces, people-move roundups, and bundled roundup headlines are dropped before grouping.
 - Mixed regulator and institutional feeds can be gated by source-specific title or link rules before grouping.
 - The source cap is applied before LLM dedupe for diversity and lower cost.
@@ -95,7 +96,7 @@ flowchart LR
 - Lower-priority `Company News` items are capped after ranking to keep fallback digests compact.
 - `discovery_only` feeds can still merge into a core story and contribute coverage context, but standalone discovery-only items are dropped before final render.
 - Placeholder OpenAI API keys from either the shell environment or `.env` are ignored for local runs.
-- LLM request timeouts retry before falling back to local duplicate resolution. Malformed responses and invalid dispositions also enter that existing fallback. Each complete API response is validated before applying its contents or promoting a keep; see the [API response contract and deferred heuristic risk](development.md#api-response-contract).
+- LLM request timeouts retry before falling back to local duplicate resolution. Malformed responses and invalid dispositions also enter that existing fallback. Each complete API response is validated before applying its contents or promoting a keep; see the [API response contract and local fallback limits](development.md#api-response-contract).
 - The LLM receives candidate groups and returns structured duplicate clusters.
 - `--dispatch-publish` triggers `.github/workflows/publish-digest.yml` with a compressed digest payload; that workflow runs the repo-local `--publish-issue` path on GitHub Actions.
 - `.github/workflows/digest.yml` is manual-only. Manual dispatch skips its schedule-only preflight, runs the API graph, and rechecks the issue idempotently only when publishing.

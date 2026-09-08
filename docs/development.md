@@ -26,7 +26,11 @@ The API graph uses separate dedupe and enrichment responses:
 - Enrichment must account for every requested item ID exactly once in `items` or `off_topic_ids`, with no overlap, repeats, or unknown IDs. An omitted `off_topic_ids` defaults to an empty list.
 - The complete set of response dispositions is validated before applying response contents or promoting a requested keep. Omitted candidates are not silently seeded or retained. Valid singleton/promotion behavior and optional title/summary defaults remain unchanged. Duplicate counts include each discarded item once; distinct-source coverage remains a separate measure.
 
-Invalid API responses go through the existing broad exception handler into local heuristic fallback, like other API failures. The API workflow remains manual-only. Rejecting these responses adds fallback triggers; the known risk of that matcher merging distinct events remains a separate follow-up, not fixed here.
+Invalid API responses go through the existing broad exception handler into local fallback, like other API failures. The API workflow remains manual-only. The fallback policy and both regular and broader fallback candidate grouping are unchanged; grouping proposes comparisons and does not authorize deletion.
+
+Local resolution merges items only within an existing group when their nonempty original headlines match after Unicode case folding and whitespace normalization (`" ".join(title.split()).casefold()`). It uses `original_title` when that value is a usable string, otherwise a usable `title`; non-string and empty values never become duplicate keys. Numbers, punctuation, word order, and negation remain significant. Summaries and shortened display titles cannot override differing original headlines.
+
+This deliberately accepts false negatives: fallback digests may retain more differently worded coverage of the same event. Short matching headlines can remain in separate candidate groups and are not merged across groups. Identical generic headlines are still a semantic limitation: matching text does not prove two reports describe the same event. Duplicate summary backfill, distinct-source coverage, item IDs, URL deduplication, discovery filtering, and finalizer limits retain their existing behavior.
 
 These API responses do not use the candidate snapshot/agent-decision envelope. The daily agent path and live automation prompts are unchanged.
 

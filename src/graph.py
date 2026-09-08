@@ -330,6 +330,16 @@ def _title_for_matching(item: CollectedItem) -> str:
     return str(item.get("title", "")).strip()
 
 
+def _original_title_key(item: CollectedItem) -> str | None:
+    for field in ("original_title", "title"):
+        title = item.get(field)
+        if isinstance(title, str):
+            key = " ".join(title.split()).casefold()
+            if key:
+                return key
+    return None
+
+
 def _significant_tokens(text: str) -> set[str]:
     return {
         token
@@ -361,21 +371,6 @@ def _build_item_match_data(item: CollectedItem) -> ItemMatchData:
         "company": _mentioned_company(title),
         "context_tokens": title_tokens | _summary_tokens(item),
         "title_tokens": title_tokens,
-    }
-
-
-def _merge_item_match_data(existing: ItemMatchData, candidate: ItemMatchData) -> ItemMatchData:
-    company = existing["company"]
-    candidate_company = candidate["company"]
-    if company and candidate_company and company != candidate_company:
-        company = None
-    elif not company:
-        company = candidate_company
-
-    return {
-        "company": company,
-        "context_tokens": existing["context_tokens"] | candidate["context_tokens"],
-        "title_tokens": existing["title_tokens"] | candidate["title_tokens"],
     }
 
 
@@ -830,32 +825,18 @@ def _normalize_coverage_sources(kept_source: str, duplicate_sources: list[str]) 
 
 def _fallback_resolve_groups(
     groups: list[list[CollectedItem]],
-    *,
-    duplicate_matcher=_is_candidate_duplicate_data,
 ) -> tuple[list[ResolvedItem], int]:
     kept_items: list[ResolvedItem] = []
     skipped_items = 0
 
     for group_index, group in enumerate(groups, start=1):
         resolved_group: list[ResolvedItem] = []
-        resolved_match_data: list[ItemMatchData] = []
+        resolved_by_title: dict[str, ResolvedItem] = {}
         for item_index, item in enumerate(group, start=1):
-            item_match_data = _build_item_match_data(item)
-            duplicate_index = next(
-                (
-                    idx
-                    for idx, existing_data in enumerate(resolved_match_data)
-                    if duplicate_matcher(existing_data, item_match_data)
-                ),
-                None,
-            )
-            if duplicate_index is not None:
+            title_key = _original_title_key(item)
+            existing_item = resolved_by_title.get(title_key) if title_key is not None else None
+            if existing_item is not None:
                 skipped_items += 1
-                existing_item = resolved_group[duplicate_index]
-                resolved_match_data[duplicate_index] = _merge_item_match_data(
-                    resolved_match_data[duplicate_index],
-                    item_match_data,
-                )
                 if not existing_item.get("summary_line"):
                     existing_item["summary_line"] = _fallback_summary_line(item)
                 existing_item["coverage_sources"] = _normalize_coverage_sources(
@@ -871,7 +852,8 @@ def _fallback_resolve_groups(
             item["tier"] = "normal"
             item["coverage_sources"] = []
             resolved_group.append(item)
-            resolved_match_data.append(item_match_data)
+            if title_key is not None:
+                resolved_by_title[title_key] = item
 
         kept_items.extend(resolved_group)
 
@@ -1381,12 +1363,8 @@ def _finalize_local_categorization(
     groups: list[list[CollectedItem]],
     *,
     log_label: str,
-    duplicate_matcher: Callable[[ItemMatchData, ItemMatchData], bool] = _is_candidate_duplicate_data,
 ) -> DigestState:
-    resolved_items, skipped_duplicates = _fallback_resolve_groups(
-        groups,
-        duplicate_matcher=duplicate_matcher,
-    )
+    resolved_items, skipped_duplicates = _fallback_resolve_groups(groups)
     state["executive_summary"] = ""
     state["top_stories"] = []
     return cast(DigestState, _finalize_items(
@@ -1558,7 +1536,6 @@ def node_categorize(state: DigestState) -> DigestState:
             state,
             _build_fallback_candidate_groups(items),
             log_label="After categorization",
-            duplicate_matcher=_is_fallback_candidate_duplicate_data,
         )
 
     try:
@@ -1577,7 +1554,6 @@ def node_categorize(state: DigestState) -> DigestState:
             state,
             _build_fallback_candidate_groups(items),
             log_label="After local categorization",
-            duplicate_matcher=_is_fallback_candidate_duplicate_data,
         )
 
 
