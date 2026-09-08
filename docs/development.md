@@ -50,6 +50,10 @@ UV_CACHE_DIR=.uv-cache uv run python src/main.py --dispatch-publish
 
 `--check-issue` writes `digest-issue-status.json` by default. `--candidates-only` writes `digest-candidates.json` and `digest-run-status.json` by default. Use `--candidates-file <path>`, `--status-file <path>`, and `--issue-status-file <path>` to override these artifacts.
 
+At handler entry, `--check-issue` removes the configured issue-status file before checking GitHub. `--candidates-only` removes the configured run-status and candidate files before its lazy graph import. Missing files are allowed; any other removal failure stops the handler before producer work. Successful invalidation prevents an unexpected failure from retaining those old artifacts. Normal success and expected error paths still write fresh status, including retryable issue errors and Bio's healthy `no_fresh_items` outcome.
+
+This guard starts only when the selected handler is entered. Failures during `uv` or Python startup, top-level imports, argument parsing, or logging setup can still leave old artifacts. File existence alone does not prove that the latest command completed. The guard also does not make subsequent JSON writes atomic.
+
 If `digest-run-status.json` reports `reason: "no_fresh_items"`, stop without writing decisions or dispatching publish. Partial feed failures remain visible in `feed_errors`, but only an all-feed failure makes candidate export fail.
 
 Local runs prefer authenticated `gh` for `--dispatch-publish`; GitHub Actions and CI-style environments prefer `DIGEST_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `GH_TOKEN` with workflow-dispatch access. Direct `--publish-issue` is still available as a manual fallback.

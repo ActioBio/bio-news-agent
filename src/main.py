@@ -154,6 +154,8 @@ def _write_json_file(path: Path, payload: Any) -> None:
 
 
 def _run_candidates_only(args: argparse.Namespace, logger: logging.Logger) -> None:
+    args.status_file.unlink(missing_ok=True)
+    args.candidates_file.unlink(missing_ok=True)
     try:
         from graph import export_candidate_snapshot
     except ModuleNotFoundError:  # pragma: no cover - module execution fallback
@@ -223,6 +225,7 @@ def _run_dispatch_publish(logger: logging.Logger) -> None:
 
 
 def _run_check_issue(args: argparse.Namespace, logger: logging.Logger) -> None:
+    args.issue_status_file.unlink(missing_ok=True)
     try:
         issue_status = check_issue_status()
     except RuntimeError as exc:
