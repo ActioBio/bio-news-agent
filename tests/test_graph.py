@@ -796,13 +796,13 @@ def test_node_categorize_without_api_key_uses_local_resolution(monkeypatch):
 
     result = node_categorize({"items": items})
 
-    assert len(result["items"]) == 1
+    assert [item["id"] for item in result["items"]] == ["a", "b"]
     assert result["items"][0]["title"] == "Pfizer announces phase 3 oncology trial results"
     assert result["items"][0]["summary_line"] == ""
     assert result["items"][0]["tier"] == "normal"
-    assert result["items"][0]["coverage_sources"] == ["Endpoints News"]
+    assert [item["coverage_sources"] for item in result["items"]] == [[], []]
     assert result.get("executive_summary") == ""
-    assert result.get("top_stories") == ["g1i1"]
+    assert result.get("top_stories") == ["g1i1", "g1i2"]
 
 
 def test_node_categorize_without_api_key_uses_duplicate_summary_when_primary_is_blank(monkeypatch):
@@ -810,7 +810,7 @@ def test_node_categorize_without_api_key_uses_duplicate_summary_when_primary_is_
         _item("a", "Pfizer announces phase 3 oncology trial results", 12, source="Pfizer"),
         _item(
             "b",
-            "Pfizer announces phase 3 oncology trial data",
+            "Pfizer announces phase 3 oncology trial results",
             11,
             source="Endpoints News",
             summary="Independent reporting explains why the phase 3 readout matters. Extra detail follows.",
@@ -913,11 +913,12 @@ def test_node_categorize_timeout_uses_local_resolution(monkeypatch):
 
     result = node_categorize({"items": items})
 
-    assert len(result["items"]) == 1
+    assert [item["id"] for item in result["items"]] == ["a", "b"]
     assert result["items"][0]["title"] == "Pfizer announces phase 3 oncology trial results"
+    assert [item["coverage_sources"] for item in result["items"]] == [[], []]
 
 
-def test_node_categorize_timeout_fallback_merges_repeated_event_singletons(monkeypatch):
+def test_node_categorize_timeout_fallback_retains_differently_worded_reports(monkeypatch):
     items = [
         _item(
             "a",
@@ -961,12 +962,8 @@ def test_node_categorize_timeout_fallback_merges_repeated_event_singletons(monke
 
     result = node_categorize({"items": items})
 
-    assert len(result["items"]) == 1
-    assert result["items"][0]["coverage_sources"] == [
-        "Endpoints News",
-        "BioPharma Dive",
-        "STAT Biotech",
-    ]
+    assert [item["id"] for item in result["items"]] == ["a", "b", "c", "d"]
+    assert [item["coverage_sources"] for item in result["items"]] == [[], [], [], []]
 
 
 def test_node_categorize_timeout_fallback_keeps_distinct_same_company_fda_stories(monkeypatch):
@@ -1006,12 +1003,12 @@ def test_node_categorize_timeout_fallback_keeps_distinct_same_company_fda_storie
 
     result = node_categorize({"items": items})
 
-    assert len(result["items"]) == 2
-    assert result["items"][0]["coverage_sources"] == ["STAT Biotech"]
-    assert result["items"][1]["coverage_sources"] == []
+    assert [item["id"] for item in result["items"]] == ["a", "b", "c"]
+    assert [item["coverage_sources"] for item in result["items"]] == [[], [], []]
     assert {item["title"] for item in result["items"]} == {
         "FDA rejects Acme cancer therapy after trial concerns",
         "FDA rejects Acme gene therapy, requests more safety data",
+        "FDA rejects Acme cancer therapy again after trial doubts",
     }
 
 
