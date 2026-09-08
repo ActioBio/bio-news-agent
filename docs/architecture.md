@@ -74,7 +74,8 @@ flowchart LR
     Y --> V{Snapshot binding and dispositions valid?}
     V -- Yes --> Z[Apply decisions]
     V -- No --> F[Stop: fail closed, nothing published]
-    L --> W[Render + write news.md]
+    L -- Responses valid --> W[Render + write news.md]
+    L -- API error or invalid response --> R
     R --> W
     Z --> W
 ```
@@ -94,7 +95,7 @@ flowchart LR
 - Lower-priority `Company News` items are capped after ranking to keep fallback digests compact.
 - `discovery_only` feeds can still merge into a core story and contribute coverage context, but standalone discovery-only items are dropped before final render.
 - Placeholder OpenAI API keys from either the shell environment or `.env` are ignored for local runs.
-- LLM request timeouts retry before falling back to local duplicate resolution.
+- LLM request timeouts retry before falling back to local duplicate resolution. Malformed responses and invalid dispositions also enter that existing fallback. Each complete API response is validated before applying its contents or promoting a keep; see the [API response contract and deferred heuristic risk](development.md#api-response-contract).
 - The LLM receives candidate groups and returns structured duplicate clusters.
 - `--dispatch-publish` triggers `.github/workflows/publish-digest.yml` with a compressed digest payload; that workflow runs the repo-local `--publish-issue` path on GitHub Actions.
 - `.github/workflows/digest.yml` is manual-only. Manual dispatch skips its schedule-only preflight, runs the API graph, and rechecks the issue idempotently only when publishing.
