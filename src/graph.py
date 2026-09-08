@@ -15,6 +15,7 @@ from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, TypedDict, cast
+from urllib.parse import unquote, urlsplit
 
 from dotenv import dotenv_values
 from langgraph.graph import StateGraph
@@ -186,6 +187,17 @@ _FALLBACK_DUPLICATE_GENERIC_TOKENS = {
     "trials",
     "update",
     "updates",
+}
+_URL_CONTEXT_NOISE_TOKENS = _FALLBACK_DUPLICATE_GENERIC_TOKENS | {
+    "article", "articles", "development", "failed", "failure", "health",
+    "medical", "medicine", "patient", "press", "release", "releases",
+    "report", "reports", "result",
+    "january", "february", "march", "april", "june", "july", "august",
+    "september", "october", "november", "december",
+} | {
+    token
+    for company in COMPANY_NAMES
+    for token in re.findall(r"[a-z]+", company.lower())
 }
 
 
@@ -450,15 +462,42 @@ def _is_fallback_candidate_duplicate_data(
     return len(anchor_overlap) >= 2 and len(context_overlap) >= 3
 
 
+def _article_url_context_tokens(item: CollectedItem) -> set[str]:
+    link = item.get("link")
+    if not isinstance(link, str):
+        return set()
+    try:
+        parsed = urlsplit(link)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return set()
+        # Accessing port also rejects malformed authority values without fetching the URL.
+        parsed.port
+    except ValueError:
+        return set()
+
+    basename = unquote(parsed.path.rstrip("/").rsplit("/", 1)[-1])
+    return {
+        token
+        for token in _significant_tokens(basename)
+        if len(token) >= 6 and token.isalpha() and token not in _URL_CONTEXT_NOISE_TOKENS
+    }
+
+
 def _build_candidate_groups(items: list[CollectedItem]) -> list[list[CollectedItem]]:
     if not items:
         return []
 
     match_data = [_build_item_match_data(item) for item in items]
+    url_tokens = [_article_url_context_tokens(item) for item in items]
     adjacency: dict[int, set[int]] = {index: set() for index in range(len(items))}
     for left_index in range(len(items)):
         for right_index in range(left_index + 1, len(items)):
-            if _is_candidate_duplicate_data(match_data[left_index], match_data[right_index]):
+            # URL hints widen editorial comparisons only, never fallback grouping or merging.
+            if (
+                _is_candidate_duplicate_data(match_data[left_index], match_data[right_index])
+                or len(url_tokens[left_index] & match_data[right_index]["context_tokens"]) >= 2
+                or len(url_tokens[right_index] & match_data[left_index]["context_tokens"]) >= 2
+            ):
                 adjacency[left_index].add(right_index)
                 adjacency[right_index].add(left_index)
 

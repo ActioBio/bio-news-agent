@@ -84,6 +84,7 @@ flowchart LR
 
 - Exact duplicates are removed by normalized URL before any LLM call.
 - The collector preserves `original_title` and RSS `summary` for duplicate resolution.
+- Regular comparison grouping also uses article-URL basename hints: at least two distinct alphabetic tokens of six or more characters must match the other item's original headline or summary, excluding configured company names and generic news/date words. Hostnames, parent directories, queries, and fragments do not supply hints. These hints only create editorial comparison opportunities; groups can contain distinct events and every merge still requires an explicit decision. Local fallback grouping does not use URL hints.
 - Local fallback merges only nonempty original headlines equal after case folding and whitespace normalization within an existing candidate group. A usable `title` is used only when the original is absent or unusable. Candidate grouping remains fuzzy, including the broader fallback grouping; numbers, punctuation, word order, negation, and differing originals prevent local merging. More near-duplicates may remain, and identical generic headlines do not prove semantic identity; see the [local fallback contract](development.md#api-response-contract).
 - Source-specific low-signal items such as webinars, sponsored posts, opinion pieces, people-move roundups, and bundled roundup headlines are dropped before grouping.
 - Mixed regulator and institutional feeds can be gated by source-specific title or link rules before grouping.
