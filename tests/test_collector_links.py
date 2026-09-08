@@ -152,4 +152,3 @@ def test_feed_size_limit_still_reports_a_fetch_failure(monkeypatch):
     assert stats["feeds_failed"] == 1
     assert stats["feeds_succeeded"] == stats["items_collected"] == 0
     assert "exceeded max size (10 bytes)" in stats["feed_errors"][0]["error"]
-
