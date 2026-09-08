@@ -8,7 +8,7 @@ import json
 import os
 import re
 import subprocess
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal, TypeVar, TypedDict
 from urllib.error import HTTPError, URLError
@@ -151,16 +151,37 @@ def _digest_now() -> datetime:
     return _utcnow().astimezone(_DIGEST_TIME_ZONE)
 
 
-def _today_title_base() -> str:
-    now = _digest_now()
-    return f"{DIGEST_ISSUE_TITLE_PREFIX} - {_MONTH_ABBREVS[now.month - 1]} {now.day}"
+def _publication_date(*, required: bool = False) -> date:
+    value = os.getenv("DIGEST_DATE")
+    if value is None:
+        if required:
+            raise RuntimeError("Missing DIGEST_DATE for Actions publication")
+        return _digest_now().date()
+    try:
+        digest_date = date.fromisoformat(value)
+    except ValueError as exc:
+        raise RuntimeError("Invalid digest date: expected YYYY-MM-DD") from exc
+    if digest_date.isoformat() != value:
+        raise RuntimeError("Invalid digest date: expected YYYY-MM-DD")
+    _require_current_digest_date(digest_date)
+    return digest_date
 
 
-def _today_issue_title() -> str:
+def _require_current_digest_date(digest_date: date) -> None:
+    if digest_date != _digest_now().date():
+        raise RuntimeError("Digest publication date is not today in America/New_York")
+
+
+def _today_title_base(digest_date: date | None = None) -> str:
+    day = digest_date or _digest_now().date()
+    return f"{DIGEST_ISSUE_TITLE_PREFIX} - {_MONTH_ABBREVS[day.month - 1]} {day.day}"
+
+
+def _today_issue_title(digest_date: date | None = None) -> str:
     override = os.getenv("DIGEST_ISSUE_TITLE_OVERRIDE", "").strip()
     if override:
         return override
-    return _today_title_base()
+    return _today_title_base(digest_date)
 
 
 def _leading_top_story(digest_body: str) -> str:
@@ -173,11 +194,11 @@ def _leading_top_story(digest_body: str) -> str:
     return story
 
 
-def _issue_title_for_body(digest_body: str) -> str:
+def _issue_title_for_body(digest_body: str, digest_date: date | None = None) -> str:
     override = os.getenv("DIGEST_ISSUE_TITLE_OVERRIDE", "").strip()
     if override:
         return override
-    base = _today_title_base()
+    base = _today_title_base(digest_date)
     story = _leading_top_story(digest_body)
     return f"{base}: {story}" if story else base
 
@@ -452,7 +473,8 @@ def _list_open_issues_via_gh(owner: str, repo: str) -> list[dict[str, Any]]:
     return [issue for issue in payload if isinstance(issue, dict)]
 
 
-def check_issue_status() -> IssueStatusResult:
+def check_issue_status(digest_date: date | None = None) -> IssueStatusResult:
+    day = digest_date or _digest_now().date()
     owner, repo = _get_repo_owner_name()
     issues = _list_open_issues(owner, repo)
 
@@ -460,11 +482,11 @@ def check_issue_status() -> IssueStatusResult:
         issue
         for issue in issues
         if isinstance(issue, dict)
-        and _issue_created_today(issue)
+        and _issue_created_today(issue, day)
         and _issue_has_label(issue, DIGEST_ISSUE_LABEL)
     ]
     if not matching_issues:
-        return {"exists": False, "issue_number": None, "title": _today_issue_title()}
+        return {"exists": False, "issue_number": None, "title": _today_issue_title(day)}
 
     existing_issue = min(matching_issues, key=lambda issue: int(issue["number"]))
     return {
@@ -474,7 +496,7 @@ def check_issue_status() -> IssueStatusResult:
     }
 
 
-def _issue_created_today(issue: dict[str, Any]) -> bool:
+def _issue_created_today(issue: dict[str, Any], digest_date: date | None = None) -> bool:
     created_at = str(issue.get("createdAt", ""))
     try:
         created = datetime.fromisoformat(created_at)
@@ -482,7 +504,9 @@ def _issue_created_today(issue: dict[str, Any]) -> bool:
         return False
     if created.tzinfo is None:
         return False
-    return created.astimezone(_DIGEST_TIME_ZONE).date() == _digest_now().date()
+    return created.astimezone(_DIGEST_TIME_ZONE).date() == (
+        digest_date or _digest_now().date()
+    )
 
 
 def _issue_has_label(issue: dict[str, Any], label_name: str) -> bool:
@@ -498,10 +522,15 @@ def _issue_has_label(issue: dict[str, Any], label_name: str) -> bool:
 
 
 def publish_issue(news_file: Path | None = None) -> PublishResult:
+    digest_date = _publication_date(
+        required=os.getenv("GITHUB_ACTIONS", "").strip().lower() == "true"
+    )
     digest_body = _read_digest_body(news_file or _NEWS_FILE)
-    issue_title = _issue_title_for_body(digest_body)
-    issue_status = check_issue_status()
+    issue_title = _issue_title_for_body(digest_body, digest_date)
+    issue_status = check_issue_status(digest_date)
     owner, repo = _get_repo_owner_name()
+    # The issue lookup can cross midnight; check again before starting any write.
+    _require_current_digest_date(digest_date)
 
     if issue_status["exists"]:
         issue_number_value = issue_status["issue_number"]
@@ -534,19 +563,23 @@ def publish_issue(news_file: Path | None = None) -> PublishResult:
 
 
 def dispatch_publish_workflow(news_file: Path | None = None) -> DispatchResult:
+    digest_date = _publication_date()
     digest_body = _read_digest_body(news_file or _NEWS_FILE)
-    issue_title = _issue_title_for_body(digest_body)
+    issue_title = _issue_title_for_body(digest_body, digest_date)
     owner, repo = _get_repo_owner_name()
+    payload = {
+        "ref": DIGEST_ACTIONS_REF,
+        "inputs": {
+            "digest_date": digest_date.isoformat(),
+            "issue_title": issue_title,
+            "issue_body_gz_b64": _encode_dispatch_body(digest_body),
+        },
+    }
+    _require_current_digest_date(digest_date)
     _github_api_request(
         "POST",
         f"/repos/{owner}/{repo}/actions/workflows/{DIGEST_PUBLISH_WORKFLOW}/dispatches",
-        payload={
-            "ref": DIGEST_ACTIONS_REF,
-            "inputs": {
-                "issue_title": issue_title,
-                "issue_body_gz_b64": _encode_dispatch_body(digest_body),
-            },
-        },
+        payload=payload,
     )
     return {
         "workflow": DIGEST_PUBLISH_WORKFLOW,

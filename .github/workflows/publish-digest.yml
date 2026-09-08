@@ -1,5 +1,10 @@
 name: Publish Biotech Digest Issue
 
+concurrency:
+  group: digest-publish-${{ github.repository }}
+  cancel-in-progress: false
+  queue: max
+
 permissions:
   contents: read
   issues: write
@@ -7,6 +12,10 @@ permissions:
 on:
   workflow_dispatch:
     inputs:
+      digest_date:
+        description: Eastern publication date (YYYY-MM-DD)
+        required: true
+        type: string
       issue_title:
         description: Issue title to create or update
         required: true
@@ -23,6 +32,7 @@ jobs:
       PYTHONPATH: src
       GITHUB_TOKEN: ${{ github.token }}
       DIGEST_OUTPUT_FILE: news.md
+      DIGEST_DATE: ${{ inputs.digest_date }}
       DIGEST_ISSUE_TITLE_OVERRIDE: ${{ inputs.issue_title }}
 
     steps:

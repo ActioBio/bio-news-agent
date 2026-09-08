@@ -3,6 +3,7 @@
 ## Prerequisites
 
 - Python 3.12+
+- Node.js for the executable workflow contract tests (available on GitHub-hosted runners).
 - [`uv`](https://docs.astral.sh/uv/)
 
 ## Quick Start
@@ -36,6 +37,17 @@ UV_CACHE_DIR=.uv-cache uv run python src/main.py --dispatch-publish
 If `digest-run-status.json` reports `reason: "no_fresh_items"`, stop without writing decisions or dispatching publish. Partial feed failures remain visible in `feed_errors`, but only an all-feed failure makes candidate export fail.
 
 Local runs prefer authenticated `gh` for `--dispatch-publish`; GitHub Actions and CI-style environments prefer `DIGEST_GITHUB_TOKEN`, `GITHUB_TOKEN`, or `GH_TOKEN` with workflow-dispatch access. Direct `--publish-issue` is still available as a manual fallback.
+
+### Publication safety
+
+`--dispatch-publish` freezes one `America/New_York` date and sends it as the required `digest_date` workflow input alongside the title and compressed body. The receiver passes it unchanged as `DIGEST_DATE`. Actions publishing rejects missing, malformed, noncanonical, past or future dates before contacting GitHub, and checks the date again after issue lookup before starting a write. An observed Eastern date change stops publication; a UTC date change alone does not invalidate the payload. The guard cannot undo a request already accepted by GitHub.
+
+The API-build workflow freezes `DIGEST_DATE` before preflight and build. Title generation and issue selection use that same date. Both publishing workflows share the repository-wide `digest-publish-${{ github.repository }}` concurrency group with `cancel-in-progress: false` and `queue: max`. This serializes Actions publishers, retains up to 100 pending runs, and leaves the existing final issue lookup inside the lock. Same-day retries update the existing issue rather than create another. Queue order is not a promise of dispatch order. See [GitHub concurrency documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
+
+Direct local `--publish-issue` without `DIGEST_DATE` remains a manual fallback using the date when the command starts; an explicitly supplied date is still validated. It does not participate in the Actions lock and must not run concurrently with Actions publishers. Standalone `--check-issue` still checks today's issue. The date binds dispatch/build to publication, not the age of an arbitrary local `news.md`; regenerate stale local output instead of redispatching it as new news.
+
+For rollout, merge the producer, receiver and workflow lock together in each repo, then update the local checkout before the next agent run. Older callers missing `digest_date` fail closed against the new receiver. Already-running workflows using older code are not retroactively protected; let those finish or handle them explicitly before relying on the new gate. No schedule or fallback-policy change is part of this batch.
+
 
 ## Decision Schema
 

@@ -104,7 +104,10 @@ def test_short_titles_reach_digest_and_issue_title(
         result = graph.node_render(result)
 
     monkeypatch.delenv("DIGEST_ISSUE_TITLE_OVERRIDE", raising=False)
-    monkeypatch.setattr(publisher, "_today_title_base", lambda: "Bio News - Jan 1")
+    monkeypatch.setattr(publisher, "DIGEST_ISSUE_TITLE_PREFIX", "Bio News")
+    monkeypatch.setattr(
+        publisher, "_utcnow", lambda: datetime(2026, 1, 1, 12, tzinfo=timezone.utc),
+    )
     assert result["items"][0]["title"] == expected_title
     assert result["items"][0]["original_title"] == SOURCE_TITLE
     assert f"**[{expected_title}](https://example.com/a)**" in result["markdown"]
