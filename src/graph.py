@@ -964,29 +964,26 @@ def _apply_dedupe_response(
     response_payload: dict[str, Any],
 ) -> tuple[list[ResolvedItem], int]:
     response_groups = response_payload.get("groups", [])
-    if not isinstance(response_groups, list):
-        raise ValueError("LLM dedupe response missing groups list")
-
-    response_group_lookup: dict[str, list[dict[str, Any]]] = {}
+    expected_group_item_ids = {
+        f"g{group_index}": set(_build_group_prompt_ids(f"g{group_index}", group))
+        for group_index, group in indexed_groups
+    }
+    # Check raw dispositions before the shared resolver promotes a keep or seeds items.
+    validate_dispositions(expected_group_item_ids, response_groups)
     for response_group in response_groups:
-        if not isinstance(response_group, dict):
-            continue
-        group_id = str(response_group.get("group_id", "")).strip()
-        clusters = response_group.get("clusters", [])
-        if not group_id or not isinstance(clusters, list):
-            continue
-        response_group_lookup[group_id] = [
-            cluster for cluster in clusters if isinstance(cluster, dict)
-        ]
+        if response_group.get("off_topic_ids", []):
+            raise ValueError("LLM dedupe response cannot discard off-topic items")
+
+    response_group_lookup = {
+        response_group["group_id"]: response_group["clusters"]
+        for response_group in response_groups
+    }
 
     kept_items: list[ResolvedItem] = []
     skipped_duplicates = 0
 
     for group_index, group in indexed_groups:
         group_id = f"g{group_index}"
-        if group_id not in response_group_lookup:
-            raise ValueError(f"LLM dedupe response missing group {group_id}")
-
         group_prompt_ids = _build_group_prompt_ids(group_id, group)
         used_ids: set[str] = set()
 
@@ -997,7 +994,7 @@ def _apply_dedupe_response(
                 used_ids,
             )
             if resolved_cluster is None:
-                continue
+                raise RuntimeError("Validated dedupe cluster could not be resolved")
 
             keep_id = resolved_cluster["keep_id"]
             cluster_member_ids = resolved_cluster["cluster_member_ids"]
@@ -1012,12 +1009,41 @@ def _apply_dedupe_response(
             used_ids.update(cluster_member_ids)
             skipped_duplicates += len(cluster_member_ids)
 
-        for prompt_id, item in group_prompt_ids.items():
-            if prompt_id in used_ids:
-                continue
-            kept_items.append(_seed_resolved_item(item, prompt_id))
-
     return kept_items, skipped_duplicates
+
+
+def _validate_enrichment_dispositions(
+    expected_ids: set[str],
+    response_items: Any,
+    off_topic_ids: Any,
+) -> None:
+    if not isinstance(response_items, list):
+        raise ValueError("LLM enrichment response missing items list")
+    if not isinstance(off_topic_ids, list):
+        raise ValueError("LLM enrichment off_topic_ids must be a list")
+
+    seen_ids: set[str] = set()
+
+    def record_item(raw_id: Any) -> None:
+        if not isinstance(raw_id, str) or raw_id not in expected_ids:
+            raise ValueError(f"Unknown enrichment item: {raw_id}")
+        if raw_id in seen_ids:
+            raise ValueError(f"Enrichment item has multiple dispositions: {raw_id}")
+        seen_ids.add(raw_id)
+
+    for response_item in response_items:
+        if not isinstance(response_item, dict):
+            raise ValueError("LLM enrichment item must be an object")
+        record_item(response_item.get("item_id"))
+    for item_id in off_topic_ids:
+        record_item(item_id)
+
+    missing = sorted(expected_ids - seen_ids)
+    if missing:
+        raise ValueError(
+            "LLM enrichment response did not account for "
+            f"{len(missing)} candidate(s): {', '.join(missing)}"
+        )
 
 
 def _apply_enrichment_response(
@@ -1029,34 +1055,24 @@ def _apply_enrichment_response(
     log_label: str,
 ) -> DigestState:
     response_items = response_payload.get("items", [])
-    if not isinstance(response_items, list):
-        raise ValueError("LLM enrichment response missing items list")
+    raw_off_topic_ids = response_payload.get("off_topic_ids", [])
+    item_lookup = {
+        str(item.get("_prompt_id", "")).strip(): item
+        for item in items
+        if str(item.get("_prompt_id", "")).strip()
+    }
+    _validate_enrichment_dispositions(set(item_lookup), response_items, raw_off_topic_ids)
 
     executive_summary = str(response_payload.get("executive_summary", "")).strip()
     raw_top_stories = response_payload.get("top_stories", [])
     if not isinstance(raw_top_stories, list):
         raw_top_stories = []
     top_story_ids = [str(s).strip() for s in raw_top_stories if isinstance(s, str)]
-    raw_off_topic_ids = response_payload.get("off_topic_ids", [])
-    if not isinstance(raw_off_topic_ids, list):
-        raw_off_topic_ids = []
-    off_topic_ids = {str(item_id).strip() for item_id in raw_off_topic_ids if isinstance(item_id, str)}
-
-    item_lookup = {
-        str(item.get("_prompt_id", "")).strip(): item
-        for item in items
-        if str(item.get("_prompt_id", "")).strip()
-    }
+    off_topic_ids = set(raw_off_topic_ids)
     enriched_items: list[ResolvedItem] = []
-    seen_ids: set[str] = set()
 
     for response_item in response_items:
-        if not isinstance(response_item, dict):
-            continue
-        item_id = str(response_item.get("item_id", "")).strip()
-        if item_id not in item_lookup or item_id in seen_ids or item_id in off_topic_ids:
-            continue
-
+        item_id = response_item["item_id"]
         item = item_lookup[item_id]
         item["category"] = _validate_category(response_item.get("category"), item)
         item["title"] = _clean_short_title(
@@ -1071,12 +1087,6 @@ def _apply_enrichment_response(
         )
         raw_tier = str(response_item.get("tier", "normal")).strip().lower()
         item["tier"] = raw_tier if raw_tier in ("high", "normal") else "normal"
-        enriched_items.append(item)
-        seen_ids.add(item_id)
-
-    for item_id, item in item_lookup.items():
-        if item_id in seen_ids or item_id in off_topic_ids:
-            continue
         enriched_items.append(item)
 
     state["executive_summary"] = executive_summary
@@ -1407,7 +1417,9 @@ Rules:
 - Input items include source_role and feed_mode. When stories are otherwise equivalent, prefer keep_id using this order: core over discovery_only, then primary, independent_reporting, commentary, community.
 - Preserve distinct stories from the same company.
 - Use the title and summary to decide duplicates.
-- If items in a group are distinct, return separate clusters for them.
+- Return every input group exactly once. Within each group, include every input item ID exactly once, either as a keep_id or in duplicate_ids. Use only IDs from that input group.
+- Represent each distinct kept item as its own cluster with duplicate_ids: [], including discovery_only items.
+- Do not discard items as off-topic during deduplication; off-topic decisions belong to enrichment.
 
 Return JSON only with this schema:
 {{
@@ -1418,6 +1430,10 @@ Return JSON only with this schema:
         {{
           "keep_id": "g1i1",
           "duplicate_ids": ["g1i2"]
+        }},
+        {{
+          "keep_id": "g1i3",
+          "duplicate_ids": []
         }}
       ]
     }}
@@ -1452,13 +1468,14 @@ def _enrich_resolved_items(
 Each item is already deduplicated.
 
 Rules:
+- Include every input item ID exactly once: either as an item_id in items or in off_topic_ids. Do not repeat IDs, invent IDs, or put an ID in both lists. Return both lists, using [] when empty.
 - Mark clearly off-topic items for a biotech/pharma industry digest as off-topic.
 - Treat these as off-topic or low-signal unless they contain a concrete material event: roundup posts, newsletter bundles, people-move items, broad trend explainers, and generic market chatter.
-- For each remaining item, assign exactly one category from this list:
+- For each retained item, assign exactly one category from this list:
 {categories_str}
-- For each item, provide a short_title of {_SHORT_TITLE_MAX_WORDS} words or fewer.
-- For each item, provide a summary_line: one plain-English sentence explaining why a general reader should care about this story.
-- For each item, assign a tier: "high" if the story has broad impact, strong novelty, solid evidence, or high practical relevance; otherwise "normal".
+- For each retained item, provide a short_title of {_SHORT_TITLE_MAX_WORDS} words or fewer.
+- For each retained item, provide a summary_line: one plain-English sentence explaining why a general reader should care about this story.
+- For each retained item, assign a tier: "high" if the story has broad impact, strong novelty, solid evidence, or high practical relevance; otherwise "normal".
 - Use source_role, feed_mode, and coverage_count as signals for authority and importance.
 - Discovery-only items are supporting signals. Do not prioritize them over core items in top_stories when a core item covers the same event.
 - Write an executive_summary: 2-3 sentences capturing the day's most important biotech/pharma themes.
@@ -1467,7 +1484,7 @@ Rules:
 Return JSON only with this schema:
 {{
   "executive_summary": "2-3 sentence overview of today's biotech news.",
-  "top_stories": ["g1i1", "g3i2", "g5i1"],
+  "top_stories": ["g1i1"],
   "off_topic_ids": ["g2i1"],
   "items": [
     {{

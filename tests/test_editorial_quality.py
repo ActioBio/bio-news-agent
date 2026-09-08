@@ -179,16 +179,13 @@ def test_coverage_excludes_promoted_core_source(tmp_path, monkeypatch, path):
     assert "(3 sources)" in to_markdown(items)
 
 
-def test_repeated_api_duplicate_ids_do_not_inflate_visible_coverage():
+def test_repeated_api_duplicate_ids_are_rejected_before_coverage_or_skip_count():
     group = [_item("keep"), _item("duplicate", "STAT Biotech", age=1)]
     response_group = _cluster(1, 2)
     response_group["clusters"][0]["duplicate_ids"] = ["g1i2", "g1i2"]
 
-    items, skipped = graph._apply_dedupe_response([(1, group)], {"groups": [response_group]})
-
-    assert skipped == 2
-    assert items[0]["coverage_sources"] == ["STAT Biotech"]
-    assert "(2 sources)" in to_markdown(items)
+    with pytest.raises(ValueError):
+        graph._apply_dedupe_response([(1, group)], {"groups": [response_group]})
 
 
 def test_daily_coverage_controls_ranking_rendering_and_api_enrichment(tmp_path, monkeypatch):
@@ -217,7 +214,7 @@ def test_daily_coverage_controls_ranking_rendering_and_api_enrichment(tmp_path, 
 
     def respond(client, prompt):
         enrichment_inputs.extend(json.loads(prompt.split("Input JSON:\n", 1)[1])["items"])
-        return json.dumps({"items": []})
+        return json.dumps({"items": [{"item_id": "g1i1"}, {"item_id": "g2i1"}]})
 
     monkeypatch.setattr(graph, "_chat_completion_text", respond)
     enriched = graph._enrich_resolved_items({}, object(), items, skipped_items=0)
