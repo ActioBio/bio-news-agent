@@ -313,6 +313,9 @@ def test_fetch_with_retry_uses_fallback_headers_after_403(monkeypatch):
     class FakeResponse:
         headers = {"Content-Type": "application/rss+xml"}
 
+        def geturl(self):
+            return "https://redirected.example/news/feed.xml"
+
         def __enter__(self):
             return self
 
@@ -320,7 +323,11 @@ def test_fetch_with_retry_uses_fallback_headers_after_403(monkeypatch):
             return False
 
         def read(self, _limit: int) -> bytes:
-            return b"<rss><channel><title>Example</title></channel></rss>"
+            return (
+                b"<rss><channel><title>Example</title>"
+                b"<item><title>Story</title><link>story</link></item>"
+                b"</channel></rss>"
+            )
 
     requests = []
 
@@ -335,6 +342,7 @@ def test_fetch_with_retry_uses_fallback_headers_after_403(monkeypatch):
     parsed = collector._fetch_with_retry("https://endpoints.news/feed/")
 
     assert parsed.feed.title == "Example"
+    assert parsed.entries[0].link == "https://redirected.example/news/story"
     assert len(requests) == 2
     assert requests[0].get_header("User-agent") == collector.RSS_USER_AGENT
     assert requests[1].get_header("User-agent") == collector.RSS_FALLBACK_USER_AGENT

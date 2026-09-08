@@ -125,6 +125,18 @@ By default, `Company News` is capped to the top 3 ranked items to keep the daily
 
 The collector reads RSS feed URLs from [`feeds.json`](../feeds.json). The file contains a JSON object where each key is a feed URL and each value specifies the `category` and human-readable `source` name.
 
+RSS and Atom relative links are resolved before URL normalization and deduplication.
+The final response URL (after redirects) supplies the default base; an absolute or
+relative `Content-Location` header overrides it, and nested `xml:base` attributes
+are handled by feedparser. See [feedparser's resolution rules](https://feedparser.readthedocs.io/en/stable/resolving-relative-links.html).
+
+Collection captures one UTC timestamp before fetching any feeds. Dated items are
+accepted from exactly 24 hours before that timestamp through exactly one hour after
+it, inclusive. The one-hour allowance tolerates publisher clock skew; later dates
+and missing dates are excluded. Fetch duration does not move either boundary.
+Filtering dates does not turn a successfully fetched and parsed feed into a failure;
+feed-health and empty-day policies are unchanged.
+
 RSS fetches use `RSS_USER_AGENT` first. If a feed returns HTTP 403, the collector retries
 that request with `RSS_FALLBACK_USER_AGENT` because some feed CDNs reject non-browser
 user agents.
