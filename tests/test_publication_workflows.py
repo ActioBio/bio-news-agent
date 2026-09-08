@@ -146,4 +146,3 @@ def test_publication_receiver_remains_manual_only():
 
 def test_legacy_bio_workflow_remains_manual_only():
     assert set(_triggers(_workflow("digest.yml"))) == {"workflow_dispatch"}
-
