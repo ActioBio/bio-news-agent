@@ -49,12 +49,14 @@ flowchart LR
     G --> JSON
     JSON --> K
     R --> MD
-    MD --> ISSUE
+    MD --> DATE{Publication date valid?}
+    DATE -- Yes --> ISSUE
+    DATE -- No --> STOP[Stop without publishing]
 
     classDef io fill:#eef7ff,stroke:#1f6feb,stroke-width:1px,color:#0b1f3a;
     classDef proc fill:#f7f7f7,stroke:#555,stroke-width:1px,color:#111;
     class FEEDS,RSS,CONF,OAI,MODEL,JSON,MD,ISSUE io;
-    class GH,AGENT,LOCAL,CHECK,C,F,G,K,R proc;
+    class GH,AGENT,LOCAL,CHECK,C,F,G,K,R,DATE,STOP proc;
 ```
 
 ```mermaid
@@ -98,3 +100,5 @@ flowchart LR
 - `.github/workflows/digest.yml` is manual-only. Manual dispatch skips its schedule-only preflight, runs the API graph, and rechecks the issue idempotently only when publishing.
 - Direct `--publish-issue` remains a manual fallback.
 - Short display titles are generated only for kept items after duplicates are resolved.
+- Publication uses one frozen Eastern date for dispatch inputs, title generation and issue selection. Actions requires `DIGEST_DATE`; missing, malformed or noncurrent dates fail closed, with a second date check after issue lookup before starting a write.
+- `digest.yml` and `publish-digest.yml` share one repository-wide Actions concurrency group, retain pending runs with `queue: max`, and do not cancel the active run. Direct manual publication bypasses that lock. See [publication safety and rollout limits](development.md#publication-safety).

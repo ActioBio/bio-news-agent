@@ -1,5 +1,10 @@
 name: Daily Biotech News Digest
 
+concurrency:
+  group: digest-publish-${{ github.repository }}
+  cancel-in-progress: false
+  queue: max
+
 permissions:
   contents: read
   issues: write 
@@ -20,6 +25,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Freeze Eastern publication date
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const digestDate = new Date().toLocaleDateString('en-CA', {
+              timeZone: 'America/New_York'
+            });
+            core.exportVariable('DIGEST_DATE', digestDate);
+
       - name: Skip if today's digest already exists
         if: github.event_name == 'schedule'
         id: preflight
@@ -31,7 +45,7 @@ jobs:
               new Date(value).toLocaleDateString('en-CA', {
                 timeZone: 'America/New_York'
               });
-            const today = digestDate(new Date());
+            const today = process.env.DIGEST_DATE;
             const query = `
               query($owner: String!, $repo: String!, $cursor: String) {
                 repository(owner: $owner, name: $repo) {

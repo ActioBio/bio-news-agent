@@ -6,6 +6,8 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 import publisher
 
 _FROZEN_NOW = datetime(2026, 4, 13, 16, 0, tzinfo=timezone.utc)
@@ -20,6 +22,12 @@ _TOP_STORY_BODY = (
     "### Regulatory & FDA\n"
     "- [Plain bullet](https://example.com/plain) — Source\n"
 )
+
+
+@pytest.fixture(autouse=True)
+def _local_publication_environment(monkeypatch):
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("DIGEST_DATE", raising=False)
 
 
 def _freeze_now(monkeypatch):
