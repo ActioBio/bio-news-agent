@@ -244,4 +244,3 @@ def test_malformed_api_response_uses_existing_local_fallback(case, monkeypatch, 
     assert "API replacement" not in result["markdown"]
     assert (tmp_path / "news.md").read_text(encoding="utf-8") == result["markdown"]
     assert len(calls) == (1 if case.startswith("dedupe-") else 2)
-
