@@ -1143,8 +1143,22 @@ def _apply_structured_response(
     executive_summary = str(response_payload.get("executive_summary", "")).strip()
     raw_top_stories = response_payload.get("top_stories", [])
     if not isinstance(raw_top_stories, list):
-        raw_top_stories = []
-    top_story_ids = [str(s).strip() for s in raw_top_stories if isinstance(s, str)]
+        raise ValueError("top_stories must be a list of requested keep_id strings")
+    requested_keep_ids = {
+        cluster["keep_id"]
+        for response_group in response_groups
+        for cluster in response_group.get("clusters", [])
+    }
+    top_story_ids: list[str] = []
+    for story_id in raw_top_stories:
+        if not isinstance(story_id, str) or story_id not in requested_keep_ids:
+            raise ValueError(
+                "top_stories entries must name requested keep_id values using item_id, "
+                "not id or link"
+            )
+        if story_id in top_story_ids:
+            raise ValueError(f"top_stories contains a repeated item_id: {story_id}")
+        top_story_ids.append(story_id)
 
     response_group_lookup: dict[str, dict[str, Any]] = {}
     for response_group in response_groups:

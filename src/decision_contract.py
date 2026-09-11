@@ -36,6 +36,14 @@ def build_candidate_envelope(
         "schema_version": CANDIDATE_SCHEMA_VERSION,
         "kind": kind,
         "categories": list(categories),
+        "decision_guidance": (
+            "Use each candidate's item_id (for example g1i1), never its id or link, "
+            "in keep_id, duplicate_ids, off_topic_ids, and top_stories. "
+            "Each top_stories entry must be a unique requested keep_id; omit "
+            "top_stories or use [] for automatic selection. Choose each cluster's "
+            "category from the top-level categories list, not the candidate item's "
+            "category (which may be All)."
+        ),
         "groups": groups,
     }
     payload["snapshot_id"] = _snapshot_id(payload)
@@ -116,7 +124,10 @@ def validate_dispositions(
 
         def record_item(raw_id: Any) -> None:
             if not isinstance(raw_id, str) or raw_id not in expected_ids:
-                raise ValueError(f"Unknown item in {group_id}: {raw_id}")
+                raise ValueError(
+                    f"Unknown item in {group_id}: {raw_id}. Use item_id, not id or link. "
+                    f"Valid item_id values: {', '.join(sorted(expected_ids))}"
+                )
             counts[raw_id] += 1
 
         off_topic_ids = response_group.get("off_topic_ids", [])

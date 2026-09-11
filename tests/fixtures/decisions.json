@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "kind": "bio-news-agent.decisions",
-  "snapshot_id": "sha256:189f922463341456412f67ed8def13d4faa8beb37399f5f7aece94d15685b4ef",
+  "snapshot_id": "sha256:b22d7e404572b12195cd25876d381412cf39d5b4492e428055993c52add8ef39",
   "executive_summary": "Pfizer posted positive phase 3 oncology data as biotech digest filtering removed off-topic content.",
   "top_stories": ["g1i1"],
   "groups": [

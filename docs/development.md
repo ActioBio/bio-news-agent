@@ -73,6 +73,8 @@ For rollout, merge the producer, receiver and workflow lock together in each rep
 
 ## Decision Schema
 
+The candidate snapshot's `decision_guidance` explains how to reference candidates and choose categories. It is included in the snapshot hash; existing schema-v5 snapshots without guidance remain valid when their hashes match. All references in `keep_id`, `duplicate_ids`, `off_topic_ids`, and `top_stories` must use the candidate's `item_id` (for example `g1i1`), never its article `id` or `link`. Cluster categories come from the top-level `categories` list, not the item-level category such as `All`.
+
 Agent decisions should use this JSON shape:
 
 ```json
@@ -134,6 +136,10 @@ The empty `groups` skeleton above is valid only for a candidate snapshot with no
 ```
 
 Every cluster must contain a list-valued `duplicate_ids`; use `[]` for a kept singleton. A standalone `discovery_only` item is valid decision input and must still be represented as an explicit singleton keep, but it is removed later during rendering. Decisions are fully validated, including snapshot binding and exhaustive dispositions, before any keep is promoted. Failed validation invalidates and removes any prior generated `news.md`, then stops before rendering or dispatch.
+
+Omitting `top_stories` or setting it to `[]` allows automatic selection. When present, it must be a list of unique strings naming requested `keep_id` values from the decisions. Unknown IDs, URLs, duplicate/off-topic IDs, repeated entries, and malformed values are rejected before promotion or rendering. A valid requested keep may subsequently be promoted to a renderable sibling through the existing alias mapping; reference the requested keep, not the future promoted duplicate. Normal downstream discovery-only removal and ranking limits are unchanged. These checks apply to agent decisions; API enrichment's top-story behavior and the local categorization fallback are unchanged.
+
+Guidance reduces authoring ambiguity but does not guarantee agent compliance. Validation prevents invalid references from silently selecting a different lead; it does not repair decisions or permit dispatch after an apply failure.
 
 Use a canonical category from the candidate snapshot and a `tier` of `high` or `normal`. Optional `short_title` values that are missing, null, non-string, or blank retain the original source title. Valid strings have whitespace normalized and are limited to 8 words. This applies to agent decisions and API enrichment.
 

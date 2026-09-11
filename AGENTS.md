@@ -35,14 +35,15 @@
 - `news.md`: rendered digest body.
 
 ## Decision Shape
-- For the full input contract, inspect the current `digest-candidates.json` and the decision-schema section in [docs/development.md](docs/development.md). `keep_id` always refers to one item id from a candidate group.
+- For the full input contract, inspect the current `digest-candidates.json`, including `decision_guidance`, and the decision-schema section in [docs/development.md](docs/development.md). `keep_id`, `duplicate_ids`, `off_topic_ids`, and `top_stories` refer to candidate `item_id` values such as `g1i1`, never the article's `id` or `link`.
+- Choose cluster categories from the snapshot's top-level `categories` list, not the candidate item's category (which may be `All`).
 - Copy candidate `snapshot_id` exactly into decisions schema v2 with kind `bio-news-agent.decisions`.
 - Include every candidate group exactly once and disposition every item exactly once as keep, duplicate, or off-topic.
 - Represent every distinct kept item, including `discovery_only`, as an explicit singleton cluster with `duplicate_ids: []`.
 - `--apply-decisions` invalidates any existing `news.md` before validation. If it exits nonzero, stop and do not run `--dispatch-publish`.
 - If binding or exhaustive validation fails, stop before dispatch; never repair the decisions with local passthrough.
 - `clusters`: duplicate groups with `keep_id` and `duplicate_ids`
-- `top_stories`
+- `top_stories`: omit or use `[]` for automatic selection; otherwise supply unique strings naming your requested `keep_id` values, before internal promotion. Duplicate/off-topic IDs, URLs, and malformed values are rejected.
 - `executive_summary`
 - `off_topic_ids`
 
