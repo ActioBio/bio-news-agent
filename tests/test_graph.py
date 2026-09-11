@@ -240,6 +240,29 @@ def test_build_candidate_snapshot_emits_bound_v5_envelope():
     )
 
 
+def test_candidate_guidance_is_exported_and_bound_to_snapshot(tmp_path, monkeypatch):
+    item = _item("https://example.com/story", "A distinct biotech story", 12)
+    monkeypatch.setattr(graph, "collect_items_with_stats", lambda: ([item], {
+        "feeds_total": 1, "feeds_succeeded": 1, "feeds_failed": 0, "feed_errors": [],
+        "items_collected": 1,
+    }))
+    monkeypatch.setattr(graph, "_filter_items", lambda items: items)
+    output = tmp_path / "candidates.json"
+
+    snapshot, status = export_candidate_snapshot(output)
+
+    assert status["ok"] is True
+    assert json.loads(output.read_text()) == snapshot
+    assert snapshot["decision_guidance"]
+    assert list(snapshot).index("decision_guidance") < list(snapshot).index("groups")
+    assert snapshot["groups"][0]["items"][0]["id"] == "https://example.com/story"
+    assert snapshot["groups"][0]["items"][0]["item_id"] == "g1i1"
+    validate_candidate_envelope(snapshot, expected_kind="bio-news-agent.candidates")
+    snapshot["decision_guidance"] = "Use article URLs instead"
+    with pytest.raises(ValueError, match="snapshot_id"):
+        validate_candidate_envelope(snapshot, expected_kind="bio-news-agent.candidates")
+
+
 def test_build_candidate_snapshot_matches_contract_fixture():
     items = [
         _item(
@@ -1080,6 +1103,100 @@ def test_apply_decisions_file_renders_from_candidate_snapshot(tmp_path, monkeypa
     assert len(result["items"]) == 1
     assert result["items"][0]["title"] == "Pfizer posts oncology trial results"
     assert output_file.read_text(encoding="utf-8") == result["markdown"]
+
+
+@pytest.fixture
+def identity_decision_files(tmp_path, monkeypatch):
+    groups = [[
+        _item("https://example.com/core", "Pfizer wins FDA approval for gene therapy", 12,
+              source="Pfizer", source_role="primary"),
+        _item("https://example.com/discovery", "Pfizer wins FDA approval for gene therapy", 11,
+              source="Commentary", feed_mode="discovery_only"),
+        _item("https://example.com/off-topic", "Unrelated product promotion", 10),
+    ], [
+        _item("https://example.com/other", "Court rules on drug pricing case", 9),
+    ]]
+    snapshot = build_candidate_envelope(
+        kind="bio-news-agent.candidates", categories=list(graph.CATEGORIES),
+        groups=graph._build_candidate_snapshot_groups(groups),
+    )
+    decisions = _bound_decisions(snapshot, [
+        {"group_id": "g1", "off_topic_ids": ["g1i3"], "clusters": [
+            {"keep_id": "g1i2", "duplicate_ids": ["g1i1"],
+             "category": "Regulatory & FDA"},
+        ]},
+        {"group_id": "g2", "off_topic_ids": [], "clusters": [
+            {"keep_id": "g2i1", "duplicate_ids": [], "category": "Policy & Politics"},
+        ]},
+    ])
+    candidates_path = tmp_path / "candidates.json"
+    decisions_path = tmp_path / "decisions.json"
+    output = tmp_path / "news.md"
+    candidates_path.write_text(json.dumps(snapshot))
+    output.write_text("stale digest")
+    monkeypatch.setattr(graph, "_NEWS_FILE", output)
+    return decisions, candidates_path, decisions_path, output
+
+
+@pytest.mark.parametrize("top_stories", [
+    None, "g1i2", {}, 7, [None], [7], [True], [{}],
+    ["g1i2", "g1i2"], ["https://example.com/discovery"],
+    ["g9i9"], ["g1i1"], ["g1i3"], ["g1i2", "g1i3"], [" g1i2 "],
+])
+def test_apply_decisions_rejects_invalid_top_stories_before_render(
+    identity_decision_files, top_stories,
+):
+    decisions, candidates, decisions_path, output = identity_decision_files
+    decisions["top_stories"] = top_stories
+    decisions_path.write_text(json.dumps(decisions))
+
+    with pytest.raises(ValueError, match="top_stories"):
+        apply_decisions_file(decisions_path, candidates)
+
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("field", ["keep_id", "duplicate_ids", "off_topic_ids"])
+def test_apply_decisions_url_dispositions_explain_item_id_without_rendering(
+    identity_decision_files, field,
+):
+    decisions, candidates, decisions_path, output = identity_decision_files
+    group = decisions["groups"][0]
+    cluster = group["clusters"][0]
+    if field == "keep_id":
+        cluster[field] = "https://example.com/discovery"
+    elif field == "duplicate_ids":
+        cluster[field] = ["https://example.com/core"]
+    else:
+        group[field] = ["https://example.com/off-topic"]
+    decisions_path.write_text(json.dumps(decisions))
+
+    with pytest.raises(ValueError) as error:
+        apply_decisions_file(decisions_path, candidates)
+
+    message = str(error.value)
+    assert "item_id" in message
+    assert "g1i1, g1i2, g1i3" in message
+    assert "id" in message and "link" in message
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("selection", ["absent", "empty", "requested"])
+def test_apply_decisions_preserves_auto_selection_and_requested_keep_promotion(
+    identity_decision_files, selection,
+):
+    decisions, candidates, decisions_path, output = identity_decision_files
+    if selection == "empty":
+        decisions["top_stories"] = []
+    elif selection == "requested":
+        decisions["top_stories"] = ["g2i1", "g1i2"]
+    decisions_path.write_text(json.dumps(decisions))
+
+    result = apply_decisions_file(decisions_path, candidates)
+
+    expected = ["g2i1", "g1i1"] if selection == "requested" else ["g1i1", "g2i1"]
+    assert result["top_stories"] == expected
+    assert output.read_text() == result["markdown"]
 
 
 def test_apply_decisions_file_matches_contract_fixtures(tmp_path, monkeypatch):
